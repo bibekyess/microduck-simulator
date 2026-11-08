@@ -20,6 +20,7 @@
 import { observe, wrapPi, kickableFoot } from "./observe.js";
 import { checkpoint } from "./run-control.js";
 import { GOAL } from "../game/goal.js";
+import { ARENA_HALF } from "../game/constants.js";
 
 const TICK_MS = 20; // tool control rate (the policy itself runs at 50 Hz)
 const WALK = 0.25; // m/s, the one walking speed (see above)
@@ -28,7 +29,11 @@ const MAX_TURN = 1.0; // rad/s, walking policy limit
 
 const STAGE_BACK = 0.5; // m behind the ball where run-ups start
 const FAR_BACK = 0.75; // m behind the ball, entry point of the line-up walk
+const MIN_ROOM = 0.55; // m of free floor behind the ball a line-up needs
 const SIDE_CLEAR = 0.35; // m beside the ball when detouring around it
+const WAYPOINT_RADIUS = 0.2; // m, arrival radius for detour / entry points
+const LINEUP_LOOKAHEAD = 0.3; // m, > the duck's ~0.2 m turning radius
+const FIELD_LIMIT = ARENA_HALF - 0.15; // m, keep waypoints off the walls
 const FOOT_OFFSET = 0.05; // m sideways: puts the ball in front of one foot
 const LOOKAHEAD = 0.15; // m, line-following lookahead
 const KICK_STOP = 0.095; // m, ball distance ahead where the approach stops
@@ -103,7 +108,19 @@ function shootingLine(obs, foot) {
 // the duck from walking through the ball. sideSpot is null (skipped) once
 // the duck is already behind the ball.
 const stagingSpot = (obs) => shootingLine(obs, null).at(-STAGE_BACK);
-const farSpot = (obs) => shootingLine(obs, null).at(-FAR_BACK);
+const farSpot = (obs) => shootingLine(obs, null).at(-Math.min(FAR_BACK, roomBehind(obs)));
+
+// Free floor behind the ball along the shooting line before the walls.
+function roomBehind(obs) {
+  const back = [-Math.cos(obs.shotHeading), -Math.sin(obs.shotHeading)];
+  let room = Infinity;
+  for (let k = 0; k < 2; k++) {
+    if (Math.abs(back[k]) < 1e-6) continue;
+    const wall = back[k] > 0 ? FIELD_LIMIT : -FIELD_LIMIT;
+    room = Math.min(room, (wall - obs.ballPos[k]) / back[k]);
+  }
+  return room;
+}
 function sideSpot(obs) {
   const line = shootingLine(obs, null);
   if (line.s < -0.3) return null;
@@ -119,7 +136,7 @@ function walkTo(env, target, radius) {
   return drive(env, (obs) => {
     const p = target(obs);
     return !p || Math.hypot(p[0] - obs.duck[0], p[1] - obs.duck[1]) < radius ? null : steerToward(obs, p);
-  }, 15, target);
+  }, 10, target);
 }
 
 async function approachForKick(env, foot) {
@@ -182,16 +199,24 @@ export const TOOLS = {
     run: async (env) => {
       // The duck can't turn in place or walk around the ball on its own:
       // 1. if it isn't behind the ball yet, detour past the ball's side;
-      // 2. walk to a point well behind the ball;
+      // 2. walk to a point well behind the ball (as far as the walls allow);
       // 3. walk up the shooting line to the staging spot, which leaves it
-      //    on the line and facing the goal.
-      if (!await walkTo(env, sideSpot, 0.15)) return failed("timed out walking around the ball");
-      if (!await walkTo(env, farSpot, 0.15)) return failed("timed out walking behind the ball");
+      //    on the line and facing the goal. If it gets near the ball without
+      //    lining up, give up rather than push the ball.
+      if (roomBehind(observe(env)) < MIN_ROOM) {
+        return failed("no room to line up: the ball is too close to a wall");
+      }
+      if (!await walkTo(env, sideSpot, WAYPOINT_RADIUS)) return failed("timed out walking around the ball");
+      if (!await walkTo(env, farSpot, WAYPOINT_RADIUS)) return failed("timed out walking behind the ball");
+      let overshot = false;
       const lined = await drive(env, (obs) => {
         const line = shootingLine(obs, null);
         const onLine = Math.abs(line.offset) < 0.08 && Math.abs(obs.facingErr) < 0.4;
-        return line.s >= -STAGE_BACK && onLine ? null : steerToward(obs, line.at(line.s + LOOKAHEAD));
+        if (line.s >= -STAGE_BACK && onLine) return null;
+        if (line.s > -0.3) { overshot = true; return null; }
+        return steerToward(obs, line.at(line.s + LINEUP_LOOKAHEAD));
       }, 8, stagingSpot);
+      if (overshot) return failed("got close to the ball without lining up");
       return lined ? done("standing behind the ball facing the goal, ready for a run-up")
         : failed("timed out lining up behind the ball");
     },

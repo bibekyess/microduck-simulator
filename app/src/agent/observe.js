@@ -4,7 +4,7 @@
 // radians; duck-frame values: fwd = ahead of the duck, lat = + to its
 // left / - to its right, bearings + = left.
 // describe(obs) -> the same thing as short plain text for System One.
-import { GOAL_CENTER, isBallInGoal } from "../game/goal.js";
+import { GOAL_CENTER, GOAL_AIM, isBallInGoal } from "../game/goal.js";
 
 export const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const deg = (rad) => Math.round((rad * 180) / Math.PI);
@@ -26,9 +26,9 @@ export function observe(env) {
     lat: -bdx * Math.sin(yaw) + bdy * Math.cos(yaw),
   };
   const goalBearing = wrapPi(Math.atan2(GOAL_CENTER[1] - y, GOAL_CENTER[0] - x) - yaw);
-  // Shooting line: from the ball to the goal centre. A kick sends the ball
-  // along the duck's heading, so this is the heading the duck should hold.
-  const shotHeading = Math.atan2(GOAL_CENTER[1] - ballPos[1], GOAL_CENTER[0] - ballPos[0]);
+  // Shooting line: from the ball to the aim point in the net. A kick sends
+  // the ball along the duck's heading, so this is the heading to hold.
+  const shotHeading = Math.atan2(GOAL_AIM[1] - ballPos[1], GOAL_AIM[0] - ballPos[0]);
   return {
     duck, ballPos, ball,
     goal: { dist: Math.hypot(GOAL_CENTER[0] - x, GOAL_CENTER[1] - y), bearing: goalBearing },

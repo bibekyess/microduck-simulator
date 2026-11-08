@@ -15,8 +15,11 @@ export const GOAL = {
   post: 0.015, // post / bar half-thickness
 };
 
-// Centre of the goal mouth: what the agent aims at.
+// Centre of the goal mouth.
 export const GOAL_CENTER = [GOAL.mouthX, 0];
+// What the agent aims at: inside the net, past the mouth, so the ball ->
+// aim direction stays sensible even when the ball sits near the line.
+export const GOAL_AIM = [GOAL.mouthX + 0.15, 0];
 
 // Static collision boxes: two posts, crossbar, back net and two side nets.
 // The open front stays open so the ball can roll in.

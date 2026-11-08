@@ -1,9 +1,9 @@
-// Shooting line: a dashed floor line from the ball to the goal centre,
+// Shooting line: a dashed floor line from the ball to the aim point in the net,
 // shown while the agent runs so viewers can see what it is lining up on.
 // update(ballXY | null) each frame; null hides it. MJCF [x, y] in, three.js
 // (x, floor, -y) out.
 import * as THREE from "three";
-import { GOAL_CENTER } from "../goal.js";
+import { GOAL_AIM } from "../goal.js";
 
 const FLOOR_Y = 0.004; // just above the floor grid, below the ball
 
@@ -20,7 +20,7 @@ export function createShotLine() {
     line.visible = !!ball;
     if (!ball) return;
     pos.setXYZ(0, ball[0], FLOOR_Y, -ball[1]);
-    pos.setXYZ(1, GOAL_CENTER[0], FLOOR_Y, -GOAL_CENTER[1]);
+    pos.setXYZ(1, GOAL_AIM[0], FLOOR_Y, -GOAL_AIM[1]);
     pos.needsUpdate = true;
     geometry.computeBoundingSphere();
     line.computeLineDistances();
