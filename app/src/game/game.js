@@ -48,6 +48,8 @@ import { GamepadSource } from "./controls/gamepad.js";
 import { haptics } from "./haptics.js";
 import { TouchSource } from "./controls/touch.js";
 import { WaypointSource } from "./controls/waypoint.js";
+import { AgentSource } from "./controls/agent.js";
+import { goalColliders, makeGoalMesh } from "./goal.js";
 import * as fx from "./fx/fx-wireframe.js";
 import { createWaypointMarker } from "./fx/waypoint-marker.js";
 import { createCeremony, CAM_RESET_S } from "./ceremony.js";
@@ -226,6 +228,12 @@ async function boot({ scene, camera, renderer }) {
     for (const w of walls) {
       doc.querySelector("worldbody").appendChild(
         el("geom", { name: w.name, type: "box", pos: w.pos, size: w.size }),
+      );
+    }
+    // Soccer goal (goal.js): static boxes, same layout as its mesh.
+    for (const c of goalColliders()) {
+      doc.querySelector("worldbody").appendChild(
+        el("geom", { name: c.name, type: "box", pos: c.pos.join(" "), size: c.size.join(" ") }),
       );
     }
     // Prop library colliders: one static box per enabled prop
@@ -539,8 +547,13 @@ async function boot({ scene, camera, renderer }) {
     isSuppressed: () => inputLocked || headMode || mode !== "walk" || !!grab,
     getManualOverride: () => padSource.isActive() || touchSource.isActive() || kbSource.isActive(),
   });
+  // Agent harness (src/agent/): drives the twist only while it runs.
+  const agentSource = new AgentSource();
+  let agentTarget = null; // [x, y] the agent is heading for, shown by the marker
   // Keyboard, pad and touch preempt by priority; waypoint is the fallback.
-  const controller = new Controller({ sources: [padSource, touchSource, kbSource, waypointSource] });
+  const controller = new Controller({
+    sources: [padSource, touchSource, kbSource, agentSource, waypointSource],
+  });
   // Right-stick camera state, read by the telemetry before the camera-orbit
   // section below has evaluated.
   let padOrbitLive = false;
@@ -726,10 +739,12 @@ async function boot({ scene, camera, renderer }) {
   // random heading + distance jitter. If the ball is already on screen,
   // peel it away first (reverse scan) and pop the new one when that
   // finishes - same appear/disappear pair as the duck's wireframe ceremony.
+  let queuedBallAt = null; // opts.at carried over a queued respawn
   function spawnBall(opts = {}) {
     if (inputLocked && !opts.fromQueue) return;
     if (!ball) return;
     if (ball.visual !== "hidden") {
+      queuedBallAt = opts.at ?? null;
       ball.queueRespawn();
       ball.despawn({ parkPhysics: parkBallPhysics });
       return;
@@ -743,8 +758,9 @@ async function boot({ scene, camera, renderer }) {
     const dist = 0.35 + (Math.random() - 0.5) * 0.1;
     const lim = ARENA_HALF - BALL_RADIUS - 0.05;
     const clamp = (v) => Math.min(lim, Math.max(-lim, v));
-    qpos[ballQposAdr] = clamp(qpos[0] + Math.cos(heading) * dist);
-    qpos[ballQposAdr + 1] = clamp(qpos[1] + Math.sin(heading) * dist);
+    // opts.at = [x, y] places the ball exactly (agent penalty setup).
+    qpos[ballQposAdr] = clamp(opts.at ? opts.at[0] : qpos[0] + Math.cos(heading) * dist);
+    qpos[ballQposAdr + 1] = clamp(opts.at ? opts.at[1] : qpos[1] + Math.sin(heading) * dist);
     qpos[ballQposAdr + 2] = BALL_RADIUS + 0.02;
     qpos[ballQposAdr + 3] = 1;
     qpos[ballQposAdr + 4] = 0;
@@ -1253,6 +1269,7 @@ async function boot({ scene, camera, renderer }) {
   reliefGridMat = grid.material; // relief drive mirrors uTopoScale into it
   const { wallMats, wallMeshes } = makeArenaWalls();
   for (const m of wallMeshes) scene.add(m);
+  scene.add(makeGoalMesh());
 
   let rig = await rigPromise;
   scene.add(rig.placer);
@@ -1965,8 +1982,8 @@ async function boot({ scene, camera, renderer }) {
     controls.update();
     updateChaseCam();
     ceremony.drive();
-    ball.drive(() => spawnBall({ fromQueue: true }));
-    waypointMarker.update(dt, waypointSource.target);
+    ball.drive(() => spawnBall({ fromQueue: true, at: queuedBallAt }));
+    waypointMarker.update(dt, agentTarget ?? waypointSource.target);
     renderTelemetry();
   }
 
@@ -2192,6 +2209,21 @@ async function boot({ scene, camera, renderer }) {
     startEntrance: () => ceremony.startEntrance(),
     loadCustomPolicy: (ref) => loadCustomPolicyIntoGame(ref),
     clearCustomPolicy: () => revertCustomPolicy(),
+    // What the agent harness (src/agent/) can see and do. MJCF ground
+    // coords; poses are read fresh on every call.
+    agentEnv: {
+      getDuckPose: () => [data.qpos[0], data.qpos[1], duckYaw(data.qpos)],
+      getBallPos: () => (ballActive ? [data.qpos[ballQposAdr], data.qpos[ballQposAdr + 1]] : null),
+      getBallSpeed: () => Math.hypot(data.qvel[ballDofAdr], data.qvel[ballDofAdr + 1]),
+      // Ready for a command: entrance/respawn done, walking, no kick running.
+      isReady: () => !inputLocked && mode === "walk" && postKickLock === 0 && !recovery,
+      setCommand: (vx, wz) => agentSource.set(vx, wz),
+      stop: () => agentSource.stop(),
+      showTarget: (xy) => { agentTarget = xy; },
+      kick: (foot) => triggerKick(foot, "agent"),
+      resetDuck: () => resetSim(),
+      placeBall: (x, y) => spawnBall({ at: [x, y] }),
+    },
   });
 
   // Deterministic hooks for automated verification (rAF pauses in

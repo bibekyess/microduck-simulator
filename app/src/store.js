@@ -41,6 +41,12 @@ export const useGame = create(
     ballActive: false,
     // Throttled telemetry block (4 Hz), bottom-right OSD
     telemetry: { fps: 0, ctrlHz: 0, speed: 0, odo: 0, peers: 0 },
+    // Agent harness run (src/agent/harness.js), rendered by AgentPanel.
+    // status: "idle" | "running" | "scored" | "failed" | "stopped" | "error"
+    // phase: null | "observe" | "decide" | "act" (current step, while running)
+    // steps: [{ n, observation, available, choice, probabilities,
+    //           confidence, latencyMs, cost, result (null while running) }]
+    agent: { status: "idle", phase: null, steps: [], error: null },
   })),
 );
 
