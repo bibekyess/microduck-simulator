@@ -44,9 +44,14 @@ export const useGame = create(
     // Agent harness run (src/agent/harness.js), rendered by AgentPanel.
     // status: "idle" | "running" | "scored" | "failed" | "stopped" | "error"
     // phase: null | "observe" | "decide" | "act" (current step, while running)
-    // steps: [{ n, observation, available, choice, probabilities,
-    //           confidence, latencyMs, cost, result (null while running) }]
-    agent: { status: "idle", phase: null, steps: [], error: null },
+    // steps: [{ n, observation, available, blocked: { tool: reason },
+    //           choice, probabilities, confidence, latencyMs, cost,
+    //           ok, result, actMs (ok/result/actMs null while running) }]
+    // startedAt / endedAt: performance.now() stamps for the run summary.
+    agent: {
+      status: "idle", paused: false, phase: null, steps: [], error: null,
+      startedAt: null, endedAt: null,
+    },
   })),
 );
 

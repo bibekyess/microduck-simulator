@@ -52,6 +52,7 @@ import { AgentSource } from "./controls/agent.js";
 import { goalColliders, makeGoalMesh } from "./goal.js";
 import * as fx from "./fx/fx-wireframe.js";
 import { createWaypointMarker } from "./fx/waypoint-marker.js";
+import { createShotLine } from "./fx/shot-line.js";
 import { createCeremony, CAM_RESET_S } from "./ceremony.js";
 import {
   audioCtx, busNode, preloadSfx, playSfx, playUrl, updateListener,
@@ -1664,6 +1665,9 @@ async function boot({ scene, camera, renderer }) {
   // frame in frame() from waypointSource.target.
   const waypointMarker = createWaypointMarker();
   scene.add(waypointMarker.group);
+  // Agent shooting line (fx/shot-line.js), shown while an agent run is live.
+  const shotLine = createShotLine();
+  scene.add(shotLine.object);
 
   // Pause: while the menu is up over a live game, keys belong to the menu.
   const setInputLock = (v) => { inputLocked = v; controller.setLocked(v); };
@@ -1984,6 +1988,8 @@ async function boot({ scene, camera, renderer }) {
     ceremony.drive();
     ball.drive(() => spawnBall({ fromQueue: true, at: queuedBallAt }));
     waypointMarker.update(dt, agentTarget ?? waypointSource.target);
+    shotLine.update(store().agent.status === "running" && ballActive
+      ? [data.qpos[ballQposAdr], data.qpos[ballQposAdr + 1]] : null);
     renderTelemetry();
   }
 

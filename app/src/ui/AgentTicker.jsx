@@ -16,7 +16,8 @@ const PHASES = [
 ];
 
 const pulse = keyframes`0%, 100% { opacity: 1 } 50% { opacity: 0.35 }`;
-const pop = keyframes`from { transform: translateY(6px); opacity: 0 } to { transform: none; opacity: 1 }`;
+// Slide only (no opacity): if animations are throttled the text still shows.
+const pop = keyframes`from { transform: translateY(6px) } to { transform: none }`;
 
 const labelOf = (name) => TOOLS[name]?.label ?? name;
 const DIM = "rgba(250,248,242,0.45)";
@@ -48,13 +49,16 @@ function PhaseRail({ phase }) {
 }
 
 // Headline: the decision being acted on, or what the agent is doing now.
-function Headline({ status, phase, last, steps }) {
+function Headline({ status, paused, phase, last, steps }) {
   if (status === "scored") {
     return <Box sx={{ fontFamily: ANTON, fontSize: "1.9rem", color: ORANGE }}>GOAL! · {steps.length} decisions</Box>;
   }
   if (status !== "running") {
     const text = { failed: "Out of steps", stopped: "Stopped", error: "Error" }[status];
     return <Box sx={{ fontFamily: ANTON, fontSize: "1.5rem", color: CREAM }}>{text}</Box>;
+  }
+  if (paused) {
+    return <Box sx={{ fontFamily: ANTON, fontSize: "1.5rem", color: CREAM }}>Paused</Box>;
   }
   if (phase !== "act" || !last) {
     return (
@@ -86,7 +90,7 @@ function Headline({ status, phase, last, steps }) {
 
 export default function AgentTicker() {
   const menuOpen = useGame((s) => s.menuOpen);
-  const { status, phase, steps } = useGame((s) => s.agent);
+  const { status, paused, phase, steps } = useGame((s) => s.agent);
   if (menuOpen || status === "idle") return null;
   const last = steps[steps.length - 1];
   const trail = steps.slice(-7, phase === "act" ? -1 : undefined);
@@ -99,19 +103,20 @@ export default function AgentTicker() {
       border: `2px solid ${status === "scored" ? ORANGE : CREAM}`, color: CREAM, fontFamily: MONO,
     }}>
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: "8px" }}>
-        <PhaseRail phase={status === "running" ? phase : null} />
+        <PhaseRail phase={status === "running" && !paused ? phase : null} />
         <Box sx={{ fontSize: "0.64rem", letterSpacing: "0.12em", color: DIM }}>
           STEP {steps.length}
         </Box>
       </Box>
-      <Headline status={status} phase={phase} last={last} steps={steps} />
+      <Headline status={status} paused={paused} phase={phase} last={last} steps={steps} />
       {trail.length > 0 && (
         <Box sx={{ display: "flex", flexWrap: "wrap", gap: "4px", mt: "10px" }}>
           {trail.map((s) => (
             <Box key={s.n} title={s.result ?? ""} sx={{
-              fontSize: "0.62rem", px: "6px", py: "2px", border: "1px solid rgba(250,248,242,0.2)", color: DIM,
+              fontSize: "0.62rem", px: "6px", py: "2px", color: DIM,
+              border: `1px solid ${s.ok === false ? "rgba(255,107,107,0.6)" : s.ok ? "rgba(61,220,132,0.6)" : "rgba(250,248,242,0.2)"}`,
             }}>
-              {s.n}. {labelOf(s.choice)}
+              {s.ok === false ? "✗" : "✓"} {s.n}. {labelOf(s.choice)}
             </Box>
           ))}
         </Box>
