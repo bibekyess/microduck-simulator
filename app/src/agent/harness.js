@@ -51,7 +51,9 @@ async function setupPenalty(env) {
   await sleep(500); // let the ball settle
 }
 
-async function runAgent(taskId) {
+// fresh: set up a new penalty; otherwise play from the field as it is
+// (still set up if there's no ball to kick).
+async function runAgent(taskId, fresh) {
   const env = gameApi.agentEnv;
   const task = TASKS[taskId];
   resetControl();
@@ -66,7 +68,7 @@ async function runAgent(taskId) {
     if (ball && isBallInGoal(ball[0], ball[1])) endRun("scored");
   }, GOAL_WATCH_MS);
   try {
-    await setupPenalty(env);
+    if (fresh || env.getBallPos() === null) await setupPenalty(env);
     const history = [];
     for (let n = 1; n <= MAX_STEPS; n++) {
       await checkpoint();
@@ -122,8 +124,8 @@ async function runAgent(taskId) {
 // ── Controls (AgentPanel buttons) ─────────────────────────────────────
 let currentRun = null;
 
-export function startAgent(taskId) {
-  currentRun = runAgent(taskId);
+export function startAgent(taskId, fresh = true) {
+  currentRun = runAgent(taskId, fresh);
 }
 
 export function pauseAgent(paused) {
@@ -142,8 +144,9 @@ export async function restartAgent(taskId) {
   startAgent(taskId);
 }
 
-// Back to a clean field: duck respawned, ball cleared, trace emptied.
-export function resetField() {
-  gameApi.agentEnv.resetDuck();
+// Back to a fresh penalty: duck respawned, ball on the spot, trace emptied.
+// START then plays from this field instead of setting up again.
+export async function resetField() {
   setAgent({ status: "idle", steps: [], error: null, startedAt: null, endedAt: null });
+  await setupPenalty(gameApi.agentEnv);
 }

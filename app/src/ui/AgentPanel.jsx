@@ -75,7 +75,7 @@ function StatusPill({ status, paused }) {
 
 function Controls({ status, paused, task }) {
   if (status === "idle") {
-    return <Button primary onClick={() => startAgent(task)}>▶ START</Button>;
+    return <Button primary onClick={() => startAgent(task, false)}>▶ START</Button>;
   }
   if (status === "running") {
     return (
