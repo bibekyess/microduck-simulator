@@ -24,7 +24,7 @@ export function setApiKey(key) {
   } catch { /* storage blocked: key just isn't remembered */ }
 }
 
-// tools: { name: description } for the options on offer this step.
+// tools: { option label: description } for the options on offer this step.
 // Returns { choice, probabilities, confidence, latencyMs, cost }.
 export async function decide(state, tools) {
   const key = getApiKey();

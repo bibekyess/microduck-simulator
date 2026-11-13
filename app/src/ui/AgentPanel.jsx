@@ -1,7 +1,8 @@
 // Agent panel (right edge): task picker, run controls, run summary and the
 // step-by-step trace from src/agent/harness.js. Each step card shows what
-// the duck saw, every tool with System One's probability (tools that
+// the duck saw, every skill option with Jev's probability (options that
 // weren't possible greyed out with the reason), and how the step ended.
+// A finished run can be exported as JSON for offline replay (replay.js).
 import { useEffect, useRef, useState } from "react";
 import Box from "@mui/material/Box";
 import { keyframes } from "@mui/material/styles";
@@ -10,7 +11,7 @@ import {
   TASKS, startAgent, pauseAgent, stopAgent, restartAgent, resetField,
 } from "../agent/harness.js";
 import { getApiKey, setApiKey } from "../agent/system-one.js";
-import { TOOLS } from "../agent/tools.js";
+import { exportRun } from "../agent/replay.js";
 import { ORANGE, MONO } from "../theme.js";
 import { ANTON, CREAM, COMIC_INK } from "./comic.jsx";
 
@@ -19,7 +20,10 @@ const BAD = "#ff6b6b";
 const DIM = "rgba(250,248,242,0.5)";
 const FAINT = "rgba(250,248,242,0.14)";
 
-const labelOf = (name) => TOOLS[name]?.label ?? name;
+const titleOf = (step) => step.options.find((o) => o.label === step.choice)?.title ?? step.choice;
+// "approach · foot: left", or just the skill when it takes no args.
+const callOf = ({ skill, args }) => [skill, Object.entries(args ?? {}).map(([k, v]) => `${k}: ${v}`).join(", ")]
+  .filter(Boolean).join(" · ");
 const secs = (ms) => `${(ms / 1000).toFixed(1)} s`;
 const pulse = keyframes`0%, 100% { opacity: 1 } 50% { opacity: 0.35 }`;
 
@@ -73,7 +77,18 @@ function StatusPill({ status, paused }) {
   );
 }
 
-function Controls({ status, paused, task }) {
+// Save the run's full trace as microduck-run-<timestamp>.json.
+function downloadRun(agent) {
+  const url = URL.createObjectURL(new Blob([exportRun(agent, agent.task)], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `microduck-run-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function Controls({ agent, task }) {
+  const { status, paused } = agent;
   if (status === "idle") {
     return <Button primary onClick={() => startAgent(task, false)}>▶ START</Button>;
   }
@@ -89,7 +104,8 @@ function Controls({ status, paused, task }) {
   return (
     <>
       <Button primary onClick={() => startAgent(task)}>↻ RUN AGAIN</Button>
-      <Button onClick={resetField}>⟲ RESET FIELD</Button>
+      <Button onClick={() => resetField(task)}>⟲ RESET FIELD</Button>
+      <Button onClick={() => downloadRun(agent)}>⇩ EXPORT RUN</Button>
     </>
   );
 }
@@ -132,12 +148,12 @@ function Chip({ children, good }) {
   );
 }
 
-function ToolRow({ name, p, chosen, reason }) {
+function OptionRow({ title, p, chosen, reason }) {
   const blocked = reason != null;
   return (
     <Box title={reason ?? ""} sx={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.64rem", opacity: blocked ? 0.38 : 1, mb: "2px" }}>
       <Box sx={{ width: 118, color: chosen ? ORANGE : CREAM, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-        {labelOf(name)}
+        {title}
       </Box>
       {blocked ? (
         <Box sx={{ flex: 1, fontStyle: "italic", color: DIM, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -156,29 +172,30 @@ function ToolRow({ name, p, chosen, reason }) {
 }
 
 function StepCard({ step, live }) {
-  const facing = step.observation.facing_goal.startsWith("yes");
+  const facing = step.observation.facing_goal?.startsWith("yes");
   const badge = step.ok == null ? null : step.ok ? { t: "✓", c: OK } : { t: "✗", c: BAD };
+  const open = step.options.filter((o) => !o.blocked);
   const rows = [
-    ...step.available.map((name) => ({ name, p: step.probabilities[name] ?? 0 })).sort((a, b) => b.p - a.p),
-    ...Object.entries(step.blocked).map(([name, reason]) => ({ name, reason })),
+    ...open.map((o) => ({ ...o, p: step.probabilities?.[o.label] ?? 0 })).sort((a, b) => b.p - a.p),
+    ...step.options.filter((o) => o.blocked),
   ];
   return (
     <Box sx={{ border: `1px solid ${live ? ORANGE : FAINT}`, p: "8px 10px", mb: "8px" }}>
       <Box sx={{ display: "flex", alignItems: "baseline", gap: "8px" }}>
         <Box sx={{ fontSize: "0.62rem", color: DIM }}>{String(step.n).padStart(2, "0")}</Box>
-        <Box sx={{ fontFamily: ANTON, fontSize: "1rem", letterSpacing: "0.03em", flex: 1 }}>{labelOf(step.choice)}</Box>
+        <Box sx={{ fontFamily: ANTON, fontSize: "1rem", letterSpacing: "0.03em", flex: 1 }}>{titleOf(step)}</Box>
         {badge ? <Box sx={{ color: badge.c, fontSize: "0.9rem" }}>{badge.t}</Box>
           : <Box sx={{ width: 7, height: 7, borderRadius: "50%", background: ORANGE, animation: `${pulse} 0.9s ease-in-out infinite` }} />}
       </Box>
       <Box sx={{ fontSize: "0.58rem", color: DIM, mb: "6px" }}>
-        think {step.latencyMs} ms{step.actMs != null && <> · act {secs(step.actMs)}</>}
+        {callOf(step)} · think {step.latencyMs} ms{step.actMs != null && <> · act {secs(step.actMs)}</>}
       </Box>
       <Box sx={{ mb: "4px" }}>
         <Chip>ball {step.observation.ball}</Chip>
         <Chip good={facing}>{facing ? "facing goal" : "not facing goal"}</Chip>
       </Box>
       {rows.map((r) => (
-        <ToolRow key={r.name} name={r.name} p={r.p} reason={r.reason} chosen={r.name === step.choice} />
+        <OptionRow key={r.label} title={r.title} p={r.p} reason={r.blocked} chosen={r.label === step.choice} />
       ))}
       <Box sx={{ fontSize: "0.66rem", mt: "6px", color: step.result ? (step.ok ? OK : BAD) : DIM }}>
         → {step.result ?? "running…"}
@@ -224,7 +241,7 @@ export default function AgentPanel() {
       </Box>
 
       <Box sx={{ display: "flex", gap: "6px", mb: "8px" }}>
-        <Controls status={status} paused={paused} task={task} />
+        <Controls agent={agent} task={task} />
       </Box>
 
       <Box component="button" onClick={() => setShowKey((v) => !v)} sx={{

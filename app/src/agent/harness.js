@@ -1,75 +1,47 @@
 // The agent loop. Each step:
-//   1. observe   duck / ball / goal geometry      (observe.js)
-//   2. gate      tools whose precondition holds   (tools.js)
-//   3. decide    System One picks one of them     (system-one.js)
-//   4. act       run that tool to completion      (tools.js)
-//   5. record    push the step to the store       (AgentPanel renders it)
-// until the ball is in the net, the step budget runs out, or Stop.
-// A goal watcher ends the run the moment the ball crosses the line, even
-// mid-tool; it and Pause / Stop reach into running tools through
-// run-control.js.
+//   1. observe   duck / ball / goal geometry           (observe.js)
+//   2. gate      every option of the task's skills     (tasks.js, tools.js)
+//   3. decide    Jev picks one of the available ones   (system-one.js)
+//   4. act       run that skill to completion          (tools.js)
+//   5. record    push the step to the store            (AgentPanel renders it)
+// until the task is done, the step budget runs out, or Stop.
+// A goal watcher ends the run the moment the task is done, even mid-skill;
+// it and Pause / Stop reach into running skills through run-control.js.
 import { useGame, gameApi } from "../store.js";
 import { observe, describe } from "./observe.js";
 import { TOOLS } from "./tools.js";
 import { decide } from "./system-one.js";
-import { isBallInGoal } from "../game/goal.js";
+import { TASKS, waitFor, gateOptions, decideInput } from "./tasks.js";
 import { checkpoint, endRun, resetControl, setPaused, RunEnded } from "./run-control.js";
 import "./bench.js"; // window.__bench debug helpers
 
-export const TASKS = {
-  penalty: {
-    label: "Penalty kick",
-    goal: "Score a goal: kick the ball into the goal net.",
-  },
-};
+export { TASKS };
 
 const MAX_STEPS = 20;
-const HISTORY_LEN = 3; // recent steps sent to System One
-const PENALTY_SPOT = [0.7, 0]; // ball start (~0.55 m out, inside kick range); y gets a random offset
-const GOAL_WATCH_MS = 50; // ball-crossed-the-line check rate
+const GOAL_WATCH_MS = 50; // task-done check rate
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const setAgent = (patch) => useGame.setState((s) => ({ agent: { ...s.agent, ...patch } }));
 const updateStep = (i, patch) => useGame.setState((s) => ({
   agent: { ...s.agent, steps: s.agent.steps.map((st, j) => (j === i ? { ...st, ...patch } : st)) },
 }));
 
-async function waitFor(cond, timeoutS = 10) {
-  const end = performance.now() + timeoutS * 1000;
-  while (!cond()) {
-    if (performance.now() > end) throw new Error("timed out waiting for the sim");
-    await sleep(50);
-  }
-}
-
-// Reset the duck and put the ball on the penalty spot.
-async function setupPenalty(env) {
-  env.resetDuck();
-  await sleep(100);
-  await waitFor(env.isReady);
-  env.placeBall(PENALTY_SPOT[0], PENALTY_SPOT[1] + (Math.random() - 0.5) * 0.6);
-  await waitFor(() => env.getBallPos() !== null);
-  await sleep(500); // let the ball settle
-}
-
-// fresh: set up a new penalty; otherwise play from the field as it is
+// fresh: set the task up anew; otherwise play from the field as it is
 // (still set up if there's no ball to kick).
 async function runAgent(taskId, fresh) {
   const env = gameApi.agentEnv;
   const task = TASKS[taskId];
   resetControl();
   setAgent({
-    status: "running", paused: false, phase: "observe", steps: [], error: null,
+    task: taskId, status: "running", paused: false, phase: "observe", steps: [], error: null,
     startedAt: performance.now(), endedAt: null,
   });
   let status = "failed", error = null;
-  let acting = null; // { i, t0 } while a tool runs, to close its step on a goal
+  let acting = null; // { i, t0 } while a skill runs, to close its step on a goal
   const goalWatch = setInterval(() => {
-    const ball = env.getBallPos();
-    if (ball && isBallInGoal(ball[0], ball[1])) endRun("scored");
+    if (env.getBallPos() && task.done(observe(env))) endRun("scored");
   }, GOAL_WATCH_MS);
   try {
-    if (fresh || env.getBallPos() === null) await setupPenalty(env);
+    if (fresh || env.getBallPos() === null) await task.setup(env);
     const history = [];
     for (let n = 1; n <= MAX_STEPS; n++) {
       await checkpoint();
@@ -77,37 +49,34 @@ async function runAgent(taskId, fresh) {
 
       setAgent({ phase: "observe" });
       const obs = observe(env);
-
-      const blocked = {};
-      for (const [name, tool] of Object.entries(TOOLS)) {
-        const reason = tool.blocker(obs);
-        if (reason) blocked[name] = reason;
-      }
-      const available = Object.keys(TOOLS).filter((name) => !blocked[name]);
+      const options = gateOptions(TOOLS, task.skills, obs);
       const observation = describe(obs);
 
       await checkpoint();
       setAgent({ phase: "decide" });
-      const decision = await decide(
-        { goal: task.goal, observation, recent_steps: history.slice(-HISTORY_LEN) },
-        Object.fromEntries(available.map((name) => [name, TOOLS[name].description])),
-      );
+      const decision = await decide(...decideInput(task, observation, history, options));
+      const chosen = options.find((o) => o.label === decision.choice && !o.blocked);
+      if (!chosen) throw new Error(`Jev picked an option not on offer: ${decision.choice}`);
 
       const i = useGame.getState().agent.steps.length;
-      useGame.setState((s) => ({
-        agent: { ...s.agent, steps: [...s.agent.steps, { n, observation, available, blocked, ...decision, result: null }] },
-      }));
+      const step = {
+        n, obs: { duck: obs.duck, ballPos: obs.ballPos }, observation,
+        options: options.map(({ description, ...o }) => o),
+        decidedBy: "jev", ...decision, skill: chosen.skill, args: chosen.args,
+        ok: null, result: null, data: null, actMs: null,
+      };
+      useGame.setState((s) => ({ agent: { ...s.agent, steps: [...s.agent.steps, step] } }));
       setAgent({ phase: "act" });
       acting = { i, t0: performance.now() };
-      const { ok, text } = await TOOLS[decision.choice].run(env);
-      updateStep(i, { ok, result: text, actMs: Math.round(performance.now() - acting.t0) });
+      const { ok, text, data = null } = await TOOLS[chosen.skill].run(env, chosen.args);
+      updateStep(i, { ok, result: text, data, actMs: Math.round(performance.now() - acting.t0) });
       acting = null;
-      history.push({ step: n, action: decision.choice, result: text });
+      history.push({ step: n, action: chosen.label, result: text });
     }
   } catch (e) {
     if (e instanceof RunEnded) status = e.reason;
     else { status = "error"; error = String(e.message ?? e); }
-    // A goal mid-tool ends that step as the one that scored.
+    // A goal mid-skill ends that step as the one that scored.
     if (status === "scored" && acting) {
       updateStep(acting.i, {
         ok: true, result: "GOAL! the ball crossed the goal line",
@@ -145,9 +114,9 @@ export async function restartAgent(taskId) {
   startAgent(taskId);
 }
 
-// Back to a fresh penalty: duck respawned, ball on the spot, trace emptied.
-// START then plays from this field instead of setting up again.
-export async function resetField() {
-  setAgent({ status: "idle", steps: [], error: null, startedAt: null, endedAt: null });
-  await setupPenalty(gameApi.agentEnv);
+// Back to the task's start state, trace emptied. START then plays from
+// this field instead of setting up again.
+export async function resetField(taskId) {
+  setAgent({ task: taskId, status: "idle", steps: [], error: null, startedAt: null, endedAt: null });
+  await TASKS[taskId].setup(gameApi.agentEnv);
 }

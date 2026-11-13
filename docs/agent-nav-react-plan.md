@@ -1,8 +1,9 @@
 # Plan: navigation stack + Jev / ReAct decider cascade
 
-Status (2026-11-13): **Phases 0-2 done** (nav stack in `app/src/nav/`,
-`go_behind_ball` on it, offline test bed, browser benchmark below);
-Phase 3 next. Supersedes the "Ideas for next time" in
+Status (2026-11-13): **Phases 0-2 and 3a done** (nav stack in
+`app/src/nav/`, `navigate_to` on it, offline test bed, browser benchmark
+below; tasks as objects, skills with params / defaults / options, `aim`,
+run export and offline replay); Phase 3b (the decider cascade) next. Supersedes the "Ideas for next time" in
 `agent-go-behind-ball.md`. Amended 2026-11-13 after review (Decisions
 5-10): via-points before Hybrid A*, scoped LLM recovery, fewer escalation
 triggers, run export, `aim` pulled forward, tasks as objects.
@@ -92,6 +93,12 @@ state over the second half):
 | 0.40 | 0 | 0.205 | 0 | | 0.26 |
 | 0.50 | 0 | 0.242 | 0 | | 0.24 |
 | 0.50 | 1.0 | 0.247 | 0.66 | 0.38 | 0.24 |
+
+Reverse (measured the same way): `vx = -0.2` and `-0.3` with `wz = 0`
+do not move the duck at all; with a turn command added it walks
+*forward* in a curve (0.15 m/s, 0.63 rad/s). So there is no back-up
+skill to be had from this policy, and a duck wedged right behind the
+ball stays a "no path" case.
 
 The duck stayed up in every row. Two things the earlier notes had wrong:
 the walk is ~0.16 m/s at the 0.25 command (not 0.1), and the policy takes
@@ -377,30 +384,45 @@ Each phase is shippable on its own and ends with the benchmark.
   behind the ball; planning < 5 ms. If a layout still fails for want of
   a path, and only then, add Hybrid A* as Phase 2b.
 
-### Phase 3: tasks, skills, decider cascade (Jev + ReAct LLM)
+### Phase 3a: tasks, skills, export (no LLM) — done 2026-11-13
 
 - `tasks.js` (task object; harness uses `task.setup` / `task.done` /
-  `task.skills`), named targets in `observe()`, `describe(obs, { full })`.
-- Skills gain `params` / `defaults` / `options`; `navigate_to`
-  generalised; `aim` on `navigate_to` and `approach`; partial-progress
-  failure text on every skill.
+  `task.skills`; `gateOptions` / `decideInput` shared with the replay),
+  named targets in `observe()`, `describe(obs, { full })`.
+- Skills gained `params` / `defaults` / `options`; `go_behind_ball` is
+  `navigate_to` (targets `behind_ball` / `spawn`); `aim` on `navigate_to`
+  and `approach` (`goal` / `left_corner` / `right_corner`, carried in
+  `obs`); partial-progress failure text on every skill; every result has
+  `data`.
+- Step record keeps the raw duck / ball poses, every gated option, the
+  merged args and Jev's probabilities; "Export run" button; `replay.js`
+  re-gates and re-decides a run offline. Fixture
+  `test/agent/fixtures/penalty-scored.json` is a real scored run (6
+  steps, recovery after a short kick) and replays with matching options.
+- Verified in the browser: Jev alone scores from Start with the new
+  option labels (4 and 6 decisions in two runs), cost unchanged
+  (~$0.00002 per decision).
+
+### Phase 3b: decider cascade (Jev + ReAct LLM)
+
 - `decider.js` (escalation rules, scoped recovery), `react.js`, `/api/llm`
   proxy, endpoint settings (base URL, model, key, custom headers) in the
   agent panel.
-- UI: decider badge, escalation reason, thought + args, cost split, run
-  export. Jev's probabilities logged on every step.
-- Offline eval: `app/test/agent/react.test.js` replaying exported runs.
+- UI: decider badge, escalation reason, thought + args, cost split.
+- Offline eval: `app/test/agent/react.test.js` replaying exported runs
+  through the cascade with a cheap model (needs a key; skipped without).
 - **Done when**: a penalty from the spot scores with **zero** LLM calls
   and Jev's cost unchanged; a deliberately failed step (e.g. ball moved
   mid-run) escalates, the LLM recovers within its call budget and hands
   back, and Jev carries on; per-run cost / latency per decider shown in
-  the panel; at least one exported run replays offline.
+  the panel.
 
 ### Phase 4: layouts that need reasoning
 
 - `nudge_ball` as a composition (`navigate_to` + `approach` with `aim` +
   `kick`); wall and corner layouts solved by the agent chaining nudge ->
-  navigate -> approach -> kick.
+  navigate -> approach -> kick. No back-up skill: the policy does not
+  reverse (measured 2026-11-13).
 - **Done when**: side-wall and far-corner layouts score.
 
 ## Benchmark
@@ -486,6 +508,12 @@ layout.
    (2026-11-13)
 10. Tasks are objects (setup, done, skills); observe() names world
     targets. (2026-11-13)
+11. Phase 3 is split: 3a (tasks, skills, export, replay; Jev only) before
+    3b (the cascade), so the skill interface is proven with one decider
+    and exported runs exist to write the ReAct prompt against.
+    (2026-11-13)
+12. No back-up skill: the walking policy ignores reverse commands.
+    (2026-11-13)
 
 ## Open decisions
 

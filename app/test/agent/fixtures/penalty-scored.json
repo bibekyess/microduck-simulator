@@ -1,0 +1,561 @@
+{
+  "version": 1,
+  "task": "penalty",
+  "status": "scored",
+  "startedAt": 13273.699999999255,
+  "endedAt": 53657.199999999255,
+  "steps": [
+    {
+      "n": 1,
+      "obs": {
+        "duck": [
+          -0.5989983688772277,
+          0.00045447710786434723,
+          -0.013480546301397667
+        ],
+        "ballPos": [
+          -0.2135914448626256,
+          -0.06612104825273628
+        ]
+      },
+      "observation": {
+        "ball": "0.39 m away; 0.39 m ahead, 0.06 m to the right",
+        "goal": "1.80 m away",
+        "facing_goal": "yes: a kick now would travel toward the goal",
+        "ball_in_goal": false
+      },
+      "options": [
+        {
+          "label": "navigate_to:behind_ball",
+          "title": "Go behind ball",
+          "skill": "navigate_to",
+          "args": {
+            "target": "behind_ball",
+            "aim": "goal"
+          },
+          "blocked": null
+        },
+        {
+          "label": "approach:left",
+          "title": "Run-up · left foot",
+          "skill": "approach",
+          "args": {
+            "aim": "goal",
+            "foot": "left"
+          },
+          "blocked": null
+        },
+        {
+          "label": "approach:right",
+          "title": "Run-up · right foot",
+          "skill": "approach",
+          "args": {
+            "aim": "goal",
+            "foot": "right"
+          },
+          "blocked": null
+        },
+        {
+          "label": "kick:left",
+          "title": "Kick · left",
+          "skill": "kick",
+          "args": {
+            "foot": "left"
+          },
+          "blocked": "ball not in front of the left foot"
+        },
+        {
+          "label": "kick:right",
+          "title": "Kick · right",
+          "skill": "kick",
+          "args": {
+            "foot": "right"
+          },
+          "blocked": "ball not in front of the right foot"
+        }
+      ],
+      "decidedBy": "jev",
+      "choice": "navigate_to:behind_ball",
+      "probabilities": {
+        "navigate_to:behind_ball": 0.62,
+        "approach:left": 0.16,
+        "approach:right": 0.22
+      },
+      "confidence": 0.43,
+      "latencyMs": 589,
+      "cost": 0.000021756,
+      "skill": "navigate_to",
+      "args": {
+        "target": "behind_ball",
+        "aim": "goal"
+      },
+      "ok": true,
+      "result": "standing behind the ball facing the goal, ready for a run-up (arrived: 9 cm from the target pose, heading off by 16°)",
+      "data": {
+        "replans": 0,
+        "pathLength": 1.9432322676063722,
+        "distM": 0.08576832512100249,
+        "headingErr": 0.271318891164108
+      },
+      "actMs": 11458
+    },
+    {
+      "n": 2,
+      "obs": {
+        "duck": [
+          -0.794368339887454,
+          -0.05969670921480163,
+          -0.2290561398371127
+        ],
+        "ballPos": [
+          -0.2135914448626256,
+          -0.06612104825273628
+        ]
+      },
+      "observation": {
+        "ball": "0.58 m away; 0.57 m ahead, 0.13 m to the left",
+        "goal": "2.00 m away",
+        "facing_goal": "no: a kick now would miss by 16° to the right",
+        "ball_in_goal": false
+      },
+      "options": [
+        {
+          "label": "navigate_to:behind_ball",
+          "title": "Go behind ball",
+          "skill": "navigate_to",
+          "args": {
+            "target": "behind_ball",
+            "aim": "goal"
+          },
+          "blocked": null
+        },
+        {
+          "label": "approach:left",
+          "title": "Run-up · left foot",
+          "skill": "approach",
+          "args": {
+            "aim": "goal",
+            "foot": "left"
+          },
+          "blocked": null
+        },
+        {
+          "label": "approach:right",
+          "title": "Run-up · right foot",
+          "skill": "approach",
+          "args": {
+            "aim": "goal",
+            "foot": "right"
+          },
+          "blocked": null
+        },
+        {
+          "label": "kick:left",
+          "title": "Kick · left",
+          "skill": "kick",
+          "args": {
+            "foot": "left"
+          },
+          "blocked": "ball not in front of the left foot"
+        },
+        {
+          "label": "kick:right",
+          "title": "Kick · right",
+          "skill": "kick",
+          "args": {
+            "foot": "right"
+          },
+          "blocked": "ball not in front of the right foot"
+        }
+      ],
+      "decidedBy": "jev",
+      "choice": "approach:left",
+      "probabilities": {
+        "navigate_to:behind_ball": 0.27,
+        "approach:left": 0.47,
+        "approach:right": 0.26
+      },
+      "confidence": 0.2,
+      "latencyMs": 392,
+      "cost": 0.000024486,
+      "skill": "approach",
+      "args": {
+        "aim": "goal",
+        "foot": "left"
+      },
+      "ok": true,
+      "result": "stopped with the ball in front of the left foot, ready to kick",
+      "data": {
+        "ballAheadM": 0.09345131587946012,
+        "offLineM": 0.008882271879786015,
+        "headingErr": 0.07551640465539457
+      },
+      "actMs": 4764
+    },
+    {
+      "n": 3,
+      "obs": {
+        "duck": [
+          -0.3085971443721668,
+          -0.11129311926757424,
+          -0.033253653328399246
+        ],
+        "ballPos": [
+          -0.2135914448626256,
+          -0.06612104825273628
+        ]
+      },
+      "observation": {
+        "ball": "0.11 m away; in kicking range of the left foot",
+        "goal": "1.51 m away",
+        "facing_goal": "yes: a kick now would travel toward the goal",
+        "ball_in_goal": false
+      },
+      "options": [
+        {
+          "label": "navigate_to:behind_ball",
+          "title": "Go behind ball",
+          "skill": "navigate_to",
+          "args": {
+            "target": "behind_ball",
+            "aim": "goal"
+          },
+          "blocked": null
+        },
+        {
+          "label": "approach:left",
+          "title": "Run-up · left foot",
+          "skill": "approach",
+          "args": {
+            "aim": "goal",
+            "foot": "left"
+          },
+          "blocked": "not behind the ball"
+        },
+        {
+          "label": "approach:right",
+          "title": "Run-up · right foot",
+          "skill": "approach",
+          "args": {
+            "aim": "goal",
+            "foot": "right"
+          },
+          "blocked": "not behind the ball"
+        },
+        {
+          "label": "kick:left",
+          "title": "Kick · left",
+          "skill": "kick",
+          "args": {
+            "foot": "left"
+          },
+          "blocked": null
+        },
+        {
+          "label": "kick:right",
+          "title": "Kick · right",
+          "skill": "kick",
+          "args": {
+            "foot": "right"
+          },
+          "blocked": "ball not in front of the right foot"
+        }
+      ],
+      "decidedBy": "jev",
+      "choice": "kick:left",
+      "probabilities": {
+        "navigate_to:behind_ball": 0.02,
+        "kick:left": 0.98
+      },
+      "confidence": 0.96,
+      "latencyMs": 422,
+      "cost": 0.000023184,
+      "skill": "kick",
+      "args": {
+        "foot": "left"
+      },
+      "ok": false,
+      "result": "the ball travelled 1.37 m and stopped short of the goal",
+      "data": {
+        "movedM": 1.365169944267553,
+        "ballPos": [
+          1.137198428045182,
+          0.13150409180080705
+        ]
+      },
+      "actMs": 5676
+    },
+    {
+      "n": 4,
+      "obs": {
+        "duck": [
+          -0.2904592685388291,
+          -0.10305949068015904,
+          -0.16272850741702102
+        ],
+        "ballPos": [
+          1.137198428045182,
+          0.13150409180080705
+        ]
+      },
+      "observation": {
+        "ball": "1.45 m away; 1.37 m ahead, 0.46 m to the left",
+        "goal": "1.49 m away",
+        "facing_goal": "no: a kick now would miss by 22° to the left",
+        "ball_in_goal": false
+      },
+      "options": [
+        {
+          "label": "navigate_to:behind_ball",
+          "title": "Go behind ball",
+          "skill": "navigate_to",
+          "args": {
+            "target": "behind_ball",
+            "aim": "goal"
+          },
+          "blocked": null
+        },
+        {
+          "label": "approach:left",
+          "title": "Run-up · left foot",
+          "skill": "approach",
+          "args": {
+            "aim": "goal",
+            "foot": "left"
+          },
+          "blocked": "too far behind the ball"
+        },
+        {
+          "label": "approach:right",
+          "title": "Run-up · right foot",
+          "skill": "approach",
+          "args": {
+            "aim": "goal",
+            "foot": "right"
+          },
+          "blocked": "too far behind the ball"
+        },
+        {
+          "label": "kick:left",
+          "title": "Kick · left",
+          "skill": "kick",
+          "args": {
+            "foot": "left"
+          },
+          "blocked": "ball not in front of the left foot"
+        },
+        {
+          "label": "kick:right",
+          "title": "Kick · right",
+          "skill": "kick",
+          "args": {
+            "foot": "right"
+          },
+          "blocked": "ball not in front of the right foot"
+        }
+      ],
+      "decidedBy": "jev",
+      "choice": "navigate_to:behind_ball",
+      "probabilities": {
+        "navigate_to:behind_ball": 1
+      },
+      "confidence": 1,
+      "latencyMs": 423,
+      "cost": 0.000024696,
+      "skill": "navigate_to",
+      "args": {
+        "target": "behind_ball",
+        "aim": "goal"
+      },
+      "ok": true,
+      "result": "standing behind the ball facing the goal, ready for a run-up (arrived: 8 cm from the target pose, heading off by 6°)",
+      "data": {
+        "replans": 0,
+        "pathLength": 1.4868022829667618,
+        "distM": 0.07689502337210531,
+        "headingErr": 0.10687552659013
+      },
+      "actMs": 8791
+    },
+    {
+      "n": 5,
+      "obs": {
+        "duck": [
+          0.6773238271812814,
+          0.4623695150905409,
+          -0.6876376773854691
+        ],
+        "ballPos": [
+          1.1701376028548087,
+          0.1339513119066947
+        ]
+      },
+      "observation": {
+        "ball": "0.59 m away; 0.59 m ahead, 0.06 m to the left",
+        "goal": "0.70 m away",
+        "facing_goal": "yes: a kick now would travel toward the goal",
+        "ball_in_goal": false
+      },
+      "options": [
+        {
+          "label": "navigate_to:behind_ball",
+          "title": "Go behind ball",
+          "skill": "navigate_to",
+          "args": {
+            "target": "behind_ball",
+            "aim": "goal"
+          },
+          "blocked": null
+        },
+        {
+          "label": "approach:left",
+          "title": "Run-up · left foot",
+          "skill": "approach",
+          "args": {
+            "aim": "goal",
+            "foot": "left"
+          },
+          "blocked": null
+        },
+        {
+          "label": "approach:right",
+          "title": "Run-up · right foot",
+          "skill": "approach",
+          "args": {
+            "aim": "goal",
+            "foot": "right"
+          },
+          "blocked": null
+        },
+        {
+          "label": "kick:left",
+          "title": "Kick · left",
+          "skill": "kick",
+          "args": {
+            "foot": "left"
+          },
+          "blocked": "ball not in front of the left foot"
+        },
+        {
+          "label": "kick:right",
+          "title": "Kick · right",
+          "skill": "kick",
+          "args": {
+            "foot": "right"
+          },
+          "blocked": "ball not in front of the right foot"
+        }
+      ],
+      "decidedBy": "jev",
+      "choice": "approach:left",
+      "probabilities": {
+        "navigate_to:behind_ball": 0.11,
+        "approach:left": 0.66,
+        "approach:right": 0.23
+      },
+      "confidence": 0.49,
+      "latencyMs": 400,
+      "cost": 0.000027636,
+      "skill": "approach",
+      "args": {
+        "aim": "goal",
+        "foot": "left"
+      },
+      "ok": true,
+      "result": "stopped with the ball in front of the left foot, ready to kick",
+      "data": {
+        "ballAheadM": 0.09372011487455878,
+        "offLineM": 0.00956836513081026,
+        "headingErr": 0.005081989819971433
+      },
+      "actMs": 5014
+    },
+    {
+      "n": 6,
+      "obs": {
+        "duck": [
+          1.0706608577793195,
+          0.1576280906088773,
+          -0.645221515019197
+        ],
+        "ballPos": [
+          1.1701414311826976,
+          0.13395159633279335
+        ]
+      },
+      "observation": {
+        "ball": "0.10 m away; in kicking range of the left foot",
+        "goal": "0.20 m away",
+        "facing_goal": "yes: a kick now would travel toward the goal",
+        "ball_in_goal": false
+      },
+      "options": [
+        {
+          "label": "navigate_to:behind_ball",
+          "title": "Go behind ball",
+          "skill": "navigate_to",
+          "args": {
+            "target": "behind_ball",
+            "aim": "goal"
+          },
+          "blocked": null
+        },
+        {
+          "label": "approach:left",
+          "title": "Run-up · left foot",
+          "skill": "approach",
+          "args": {
+            "aim": "goal",
+            "foot": "left"
+          },
+          "blocked": "not behind the ball"
+        },
+        {
+          "label": "approach:right",
+          "title": "Run-up · right foot",
+          "skill": "approach",
+          "args": {
+            "aim": "goal",
+            "foot": "right"
+          },
+          "blocked": "not behind the ball"
+        },
+        {
+          "label": "kick:left",
+          "title": "Kick · left",
+          "skill": "kick",
+          "args": {
+            "foot": "left"
+          },
+          "blocked": null
+        },
+        {
+          "label": "kick:right",
+          "title": "Kick · right",
+          "skill": "kick",
+          "args": {
+            "foot": "right"
+          },
+          "blocked": "ball not in front of the right foot"
+        }
+      ],
+      "decidedBy": "jev",
+      "choice": "kick:left",
+      "probabilities": {
+        "navigate_to:behind_ball": 0.07,
+        "kick:left": 0.93
+      },
+      "confidence": 0.86,
+      "latencyMs": 416,
+      "cost": 0.00002478,
+      "skill": "kick",
+      "args": {
+        "foot": "left"
+      },
+      "ok": true,
+      "result": "GOAL! the ball crossed the goal line",
+      "data": null,
+      "actMs": 1625
+    }
+  ]
+}

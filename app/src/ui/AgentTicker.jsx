@@ -5,7 +5,6 @@
 import Box from "@mui/material/Box";
 import { keyframes } from "@mui/material/styles";
 import { useGame } from "../store.js";
-import { TOOLS } from "../agent/tools.js";
 import { ORANGE, MONO } from "../theme.js";
 import { ANTON, CREAM } from "./comic.jsx";
 
@@ -19,7 +18,8 @@ const pulse = keyframes`0%, 100% { opacity: 1 } 50% { opacity: 0.35 }`;
 // Slide only (no opacity): if animations are throttled the text still shows.
 const pop = keyframes`from { transform: translateY(6px) } to { transform: none }`;
 
-const labelOf = (name) => TOOLS[name]?.label ?? name;
+// An option label's title as offered in that step.
+const titleOf = (step, label) => step.options.find((o) => o.label === label)?.title ?? label;
 const DIM = "rgba(250,248,242,0.45)";
 
 function PhaseRail({ phase }) {
@@ -70,18 +70,19 @@ function Headline({ status, paused, phase, last, steps }) {
   const alt = Object.entries(last.probabilities)
     .filter(([n]) => n !== last.choice).sort((a, b) => b[1] - a[1])[0];
   const p = last.probabilities[last.choice] ?? last.confidence ?? 0;
+  const open = last.options.filter((o) => !o.blocked).length;
   return (
     <Box key={last.n} sx={{ animation: `${pop} 0.25s ease-out` }}>
       <Box sx={{ display: "flex", alignItems: "baseline", gap: "12px" }}>
-        <Box sx={{ fontFamily: ANTON, fontSize: "1.9rem", color: CREAM, lineHeight: 1.1 }}>{labelOf(last.choice)}</Box>
+        <Box sx={{ fontFamily: ANTON, fontSize: "1.9rem", color: CREAM, lineHeight: 1.1 }}>{titleOf(last, last.choice)}</Box>
         <Box sx={{ color: ORANGE, fontSize: "0.9rem" }}>{Math.round(p * 100)}%</Box>
       </Box>
       <Box sx={{ height: 3, background: "rgba(250,248,242,0.12)", my: "6px" }}>
         <Box sx={{ width: `${Math.round(p * 100)}%`, height: "100%", background: ORANGE, transition: "width 0.3s" }} />
       </Box>
       <Box sx={{ fontSize: "0.68rem", color: DIM }}>
-        chosen from {last.available.length} option{last.available.length > 1 ? "s" : ""}
-        {alt && <> · runner-up {labelOf(alt[0])} {Math.round(alt[1] * 100)}%</>}
+        chosen from {open} option{open > 1 ? "s" : ""}
+        {alt && <> · runner-up {titleOf(last, alt[0])} {Math.round(alt[1] * 100)}%</>}
         {" · "}{last.latencyMs} ms
       </Box>
     </Box>
@@ -116,7 +117,7 @@ export default function AgentTicker() {
               fontSize: "0.62rem", px: "6px", py: "2px", color: DIM,
               border: `1px solid ${s.ok === false ? "rgba(255,107,107,0.6)" : s.ok ? "rgba(61,220,132,0.6)" : "rgba(250,248,242,0.2)"}`,
             }}>
-              {s.ok === false ? "✗" : "✓"} {s.n}. {labelOf(s.choice)}
+              {s.ok === false ? "✗" : "✓"} {s.n}. {titleOf(s, s.choice)}
             </Box>
           ))}
         </Box>

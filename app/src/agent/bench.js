@@ -56,7 +56,7 @@ export async function run(names) {
     await waitFor(() => env.getBallPos());
     await sleep(600);
     const b0 = env.getBallPos(), t0 = performance.now();
-    const res = await TOOLS.go_behind_ball.run(env);
+    const res = await TOOLS.navigate_to.run(env, { ...TOOLS.navigate_to.defaults });
     const b1 = env.getBallPos() ?? b0, o = observe(env);
     rows.push(`${c.name}: ${res.ok ? "OK" : "FAIL"} ${((performance.now() - t0) / 1000).toFixed(1)}s, ${res.text}, ` +
       `ball pushed ${Math.hypot(b1[0] - b0[0], b1[1] - b0[1]).toFixed(2)} m, facing err ${Math.round(o.facingErr * 57.3)}°`);
