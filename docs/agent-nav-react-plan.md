@@ -1,0 +1,497 @@
+# Plan: navigation stack + Jev / ReAct decider cascade
+
+Status (2026-11-13): **Phases 0-2 done** (nav stack in `app/src/nav/`,
+`go_behind_ball` on it, offline test bed, browser benchmark below);
+Phase 3 next. Supersedes the "Ideas for next time" in
+`agent-go-behind-ball.md`. Amended 2026-11-13 after review (Decisions
+5-10): via-points before Hybrid A*, scoped LLM recovery, fewer escalation
+triggers, run export, `aim` pulled forward, tasks as objects.
+
+## Why
+
+`go_behind_ball` is a hand-tuned waypoint script (side spot -> far spot ->
+line-up) built for one layout. It is slow (it loops back to a fixed far
+point even when the duck is already behind the ball, walks everything at
+the minimum speed, and stops between phases) and every new layout needs a
+new special case. The decision layer (Jev) can only pick a tool name: no
+reasoning, no arguments, no reflection on failures.
+
+Goal: a general structure that production robots use and that extends to
+new scenarios (other targets, more obstacles, other tasks) by adding
+skills, not by rewriting control code.
+
+## Architecture
+
+Two halves, each doing what it is good at:
+
+```
+ Task object                  goal text, setup, done(obs), allowed skills
+   |
+ Decider (cascade)
+   Jev (System One)           picks a skill each step; fast, cheap, accurate
+     | escalates after a failure or when Jev asks for it
+   ReAct LLM (System Two)     Thought -> Action(skill, args) -> Observation
+   |                          keeps control for a few calls until recovered
+   | skill calls
+ Skills (tools)               navigate_to, approach, kick, nudge_ball, ...
+   |                          deterministic, return { ok, text, data }
+ Nav stack                    planner (Dubins, via-points around obstacles)
+   |                          + controller (Regulated Pure Pursuit), replans
+ RL policies                  walking + kick ONNX policies (unchanged)
+```
+
+Rule of thumb: **numbers that come from geometry are computed in code;
+arguments that express intent come from the LLM.** Neither decider ever
+produces velocities, step counts or raw coordinates ("walk left 4 cm" is
+not even feasible for a forward-only duck). They pick *what* to do (skill +
+semantic args, e.g. aim for the left corner, use the right foot, nudge the
+ball away from the wall); the nav stack decides *how* to drive there.
+This is the split used by SayCan, Inner Monologue, Code-as-Policies and Figure's Helix
+(System 2 / System 1), and Nav2 for the lower half.
+
+## Lower half: navigation stack (`app/src/nav/`)
+
+Pure functions, no imports from `game/` or the DOM, so they run under
+`node --test` and in the offline test bed.
+
+### Files
+
+| File | Contents |
+|---|---|
+| `nav/robot.js` | Robot model: measured motion limits (one object, documented) |
+| `nav/world.js` | World model: walls + circular obstacles, `isFree(pose, path)` |
+| `nav/dubins.js` | Dubins shortest path between two poses (6 word types: LSL, RSR, LSR, RSL, RLR, LRL), sampling to a polyline |
+| `nav/planner.js` | `plan(start, goal, world)`: direct Dubins, then Dubins via-points (Phase 2), else `null` |
+| `nav/hybrid-astar.js` | Only if a benchmark case still fails after via-points: Hybrid A* over (x, y, heading) |
+| `nav/pure-pursuit.js` | Regulated Pure Pursuit: path + pose -> `[vx, wz]` |
+| `nav/navigate.js` | `navigate(env, goalFn, opts)`: plan, follow, replan, report |
+
+### Robot model (`robot.js`)
+
+Fitted from logs, not measured by hand: Phase 0 records command and pose
+at 50 Hz during a few runs and a small script fits actual speed per
+command, turn rate per command (and whether it depends on speed) and the
+start lag. The table in `agent-go-behind-ball.md` is the prior.
+
+Measured 2026-11-13 with `__bench.measure(vx, wz)` (4 s holds, steady
+state over the second half):
+
+| vx cmd | wz cmd | speed m/s | turn rad/s | radius m | lag s |
+|---|---|---|---|---|---|
+| 0.22 | 1.0 | 0.157 | 0.48 | 0.33 | 0.38 |
+| 0.25 | 0 | 0.158 | 0 | | ~0.4 |
+| 0.25 | 0.5 | 0.161 | 0.33 | 0.49 | 0.65 |
+| 0.25 | 1.0 | 0.165 | 0.53 | 0.31 | 0.39 |
+| 0.25 | 1.5 | 0.166 | 0.70 | 0.24 | 0.25 |
+| 0.25 | 2.0 | 0.163 | 0.85 | 0.19 | 0.40 |
+| 0.30 | 2.0 | 0.177 | 0.99 | 0.18 | 0.25 |
+| 0.30 | 2.5 | 0.176 | 1.19 | 0.15 | 0.39 |
+| 0.35 | 0 | 0.189 | 0 | | 0.43 |
+| 0.35 | 1.0 | 0.190 | 0.69 | 0.28 | 0.25 |
+| 0.35 | 2.0 | 0.192 | 1.10 | 0.18 | 0.42 |
+| 0.40 | 0 | 0.205 | 0 | | 0.26 |
+| 0.50 | 0 | 0.242 | 0 | | 0.24 |
+| 0.50 | 1.0 | 0.247 | 0.66 | 0.38 | 0.24 |
+
+The duck stayed up in every row. Two things the earlier notes had wrong:
+the walk is ~0.16 m/s at the 0.25 command (not 0.1), and the policy takes
+turn commands well above the keyboard's 1.0 rad/s. The model in
+`robot.js`:
+
+```js
+export const ROBOT = {
+  vMinCmd: 0.22,    // m/s command below which the policy doesn't step
+  vCurve: 0.3,      // m/s command on curves (0.18 m/s actual)
+  vMaxCmd: 0.4,     // m/s command on straights (0.21 m/s actual)
+  wMax: 2.0,        // rad/s command limit (2.5 was still stable; margin kept)
+  turnPerCmd: 0.45, // actual rad/s per commanded rad/s
+  turnRadius: 0.18, // m, at vCurve and wMax
+  planRadius: 0.235,// m, 1.3 x turnRadius: what the planner uses
+  lag: 0.3,         // s, first-order response to a command
+  radius: 0.08,     // m, footprint for collision checks
+};
+export const actualSpeed = (vx) => (vx < ROBOT.vMinCmd ? 0 : 0.09 + 0.3 * vx);
+```
+
+`planRadius` and the controller's lookahead are tied: the lookahead is
+one `planRadius` (0.12 m on the last stretch, so the heading settles),
+because a lookahead longer than the planned turn radius cannot track the
+tightest arcs.
+
+### World model (`world.js`)
+
+```js
+makeWorld({
+  bounds: ARENA_HALF - margin,          // square arena walls
+  obstacles: [{ x, y, r }],             // ball (r = BALL_RADIUS + clearance), goal posts; later: other ducks
+})
+world.isFree([x, y])                    // point vs walls + obstacles, inflated by ROBOT.radius
+world.pathFree(points)                  // every sample free
+```
+
+Obstacles are recomputed from `observe()` each plan, so a moved ball is
+picked up automatically.
+
+### Planner
+
+- **Pose**: `[x, y, heading]`.
+- **Dubins** gives the shortest forward-only path with turn radius
+  `planRadius`: closed form, microseconds. Try all 6 words, keep the
+  shortest collision-free one. This alone covers the open-field cases.
+- **Dubins via-points** (Phase 2) when no direct word is free (ball
+  between duck and goal pose): candidate intermediate poses on a ring
+  around each obstacle at its inflated radius, headings tangent to the
+  ring in both directions (~8 points x 2 headings per obstacle), path =
+  Dubins(start -> via) + Dubins(via -> goal); keep the shortest
+  collision-free combination. A few dozen closed-form evaluations, tens of
+  lines of code. The arena has one real obstacle, so this should cover
+  every benchmark layout that has room behind the ball.
+- **Hybrid A*** only if a benchmark case still fails after via-points.
+  Not planned in detail until then.
+- Returns `{ points: [[x, y, heading], ...], length }` or `null` with a
+  reason (`"goal pose is blocked"`, `"no path"`), which becomes the skill's
+  failure text for the agent.
+
+### Controller: Regulated Pure Pursuit
+
+Nav2's default for car-like robots:
+
+- Lookahead point on the path at distance `L` (scaled with speed, clamped
+  to about `[0.8, 1.5] x planRadius`).
+- Curvature `k = 2 * sin(alpha) / L`, `wz = v * k`, clamped to `wMax`.
+- Speed regulation: slow down on high curvature and when close to the goal
+  (`v -> vMinCmd` within ~0.25 m), never below `vMinCmd` while moving.
+  On any curve the speed must drop to `vCurve`, because the turn radius
+  grows with speed: the planner's `turnRadius` only holds at `vCurve`.
+- **Path extended past the goal pose** by one lookahead along the final
+  heading, so the pursuit converges onto the heading instead of cutting
+  the last corner. The duck stops when it reaches the real goal pose.
+- Done when within position tolerance and heading tolerance of the goal.
+
+### `navigate()`
+
+```js
+await navigate(env, goalFn, {
+  obstacles: (obs) => [...],   // what to avoid (default: the ball)
+  posTol: 0.06, headingTol: 0.3, timeoutS: 20,
+})  // -> { ok, text, data: { timeS, pathLength, replans } }
+```
+
+- `goalFn(obs)` returns the goal pose, re-evaluated each tick, so goals
+  attached to the ball follow it.
+- Replan when: the goal pose moved > 5 cm, the duck is > 10 cm off the
+  path, or the path became blocked. Otherwise keep following.
+- Split into a **pure step function** `navStep(state, obs, now) -> { cmd,
+  state, done }` (planning, replanning, pursuit; no timers, no `env`) and a
+  thin async runner on the existing `drive()` loop. The offline test bed
+  calls `navStep` with a virtual clock; the browser calls the runner.
+- The runner uses the existing `drive()` loop semantics: pause/stop via
+  `run-control.js`, intent shown with `env.showTarget` (extend to draw the
+  whole path).
+
+## Upper half: tasks, skills, decider cascade
+
+### Tasks (`agent/tasks.js`)
+
+A task is an object, so a new scenario is a new entry, not a harness
+change:
+
+```js
+penalty: {
+  label: "Penalty kick",
+  goal: "Score a goal: kick the ball into the goal net.",
+  setup: async (env) => { ... },          // duck respawned, ball on the spot
+  done: (obs) => obs.ballInGoal,          // checked by the harness watcher
+  skills: ["navigate_to", "approach", "kick"],
+}
+```
+
+The harness's goal watcher calls `task.done(obs)` instead of
+`isBallInGoal` directly. Later tasks: obstacle course (`navigate_to` with
+more obstacles), dribble to a point, penalty with a keeper duck.
+
+### Named world targets (`agent/observe.js`)
+
+`observe()` also returns a map of named things (`ball`, `goal`, `spawn`;
+later `cone_A`, `duck_2`). Skills resolve semantic targets like
+`behind_ball` against it; other ducks become obstacles in the world model
+through the same map. For the LLM, `describe(obs, { full: true })` adds
+what Jev doesn't need: ball distance to the nearest walls, room behind the
+ball, the duck's offset from the shooting line, and the last skill's
+`data`.
+
+### Skills (`agent/tools.js`)
+
+Each skill keeps the current shape (`description`, `blocker`, `run`) and
+gains:
+
+- `params`: JSON schema of its **semantic** args (named targets, sides,
+  directions), resolved to poses in code. Used by the LLM.
+- `defaults`: the args used when no one passes any, so every skill can run
+  without the LLM.
+- `options`: the small set of arg presets offered to Jev as separate
+  choices (e.g. `approach` -> `approach:left`, `approach:right`), so Jev
+  keeps choosing among fixed labels exactly as today.
+
+| Skill | Args (default) | Jev options | Implementation |
+|---|---|---|---|
+| `navigate_to` | `target`: `"behind_ball"` \| `"spawn"` (`behind_ball`); `aim` (`goal`) | `navigate_to:behind_ball` | `navigate()` to the resolved pose, ball as obstacle |
+| `approach` | `foot`: `left` \| `right` (none); `aim` (`goal`) | `:left`, `:right` | existing `approachForKick` (line-following, unchanged, see Decisions) |
+| `kick` | `foot` (none) | `:left`, `:right` | existing `kick` |
+| `nudge_ball` (Phase 4) | `direction`: `"away_from_wall"` \| `"toward_goal"` (`away_from_wall`) | `nudge_ball:away_from_wall` | `navigate_to` + `approach` with `aim` = that direction, then a `kick`: a composition of the skills above, no new control law |
+
+`go_behind_ball` becomes `navigate_to({ target: "behind_ball" })`. Every
+skill returns `{ ok, text, data }`; `text` is the observation both
+deciders read. No skill takes raw coordinates or distances in cm.
+
+**`aim`** (`goal` \| `left_corner` \| `right_corner` \| `away_from_wall`)
+is the direction the shooting line points. `shootingLine` takes it instead
+of always using `GOAL_AIM`. It is pulled forward because `nudge_ball` is
+just the normal play aimed elsewhere, and because the far-corner layout has
+no room on the wall side either, so a nudge there is a kick along the
+wall.
+
+**Failures report partial progress.** A timeout says how far from the goal
+pose the duck got and how far off its heading is, never just "timed out".
+That text is what the LLM diagnoses from; a bare timeout forces a blind
+retry.
+
+### Decider cascade (`agent/decider.js`, replaces the `decide()` call in `harness.js`)
+
+Jev decides by default; the ReAct LLM is called only when needed. This is
+a model cascade: cheap fast model first, slow strong model on escalation.
+
+```
+each step:
+  obs, gated options          (as today)
+  if escalate(prev step, jev) -> LLM recovery: up to N calls, then a summary
+  else                        -> Jev: skill option
+```
+
+Escalate to the LLM when either of:
+
+1. **The last skill failed** (`ok: false`): diagnosis and recovery.
+2. **Jev asks for it**: an extra Jev option `think_it_through` ("none of
+   these fits the situation") is always on offer, so Jev itself can
+   escalate when non-default args or an unusual recovery are needed.
+
+Deferred until logged runs exist: escalating on low confidence or a small
+top-two margin. Jev's probabilities are logged on every step from Phase 3
+on, so the thresholds can be chosen from data instead of guessed. An LLM
+plan at task start (the old Phase 3b) is dropped for the penalty.
+
+Rules:
+
+- An escalation is a **scoped recovery**, like a sub-agent: the LLM keeps
+  control for up to `N` skill calls (start: 3) until it declares the
+  situation back to normal, then returns a one-line summary that goes
+  into Jev's `recent_steps`. Jev never sees a half-finished recovery, so
+  it cannot undo one.
+- LLM budget per run (e.g. 2 escalations). Out of budget -> Jev only;
+  repeated identical failures end the run.
+- Normal play (penalty from the spot) should need **zero** LLM calls.
+
+### Jev (`agent/system-one.js`, unchanged API)
+
+Gets options as `skill:preset` labels plus `think_it_through`; state gains
+`recent_steps[].decided_by` and the LLM's recovery summary when there was
+one. Its `describe(obs)` text stays as terse as today.
+
+### ReAct LLM (`agent/react.js`)
+
+- Tool-calling LLM through any **OpenAI-compatible chat-completions
+  endpoint** (OpenRouter by default; also local servers, gateways, other
+  providers). Configured as `{ baseUrl, model, apiKey, headers }`, where
+  `headers` are optional custom headers (e.g. OpenRouter's `HTTP-Referer` /
+  `X-Title`, or a gateway's auth header). Set in the agent panel (kept in
+  localStorage like the current key) or in `app/.env` for the dev-server
+  proxy (`/api/llm`, same pattern as `/api/s1`). Start with a fast Claude
+  model (Haiku class), compare with a Sonnet-class one; exact model IDs
+  checked at implementation time.
+- Many OpenAI-compatible endpoints block browser requests (CORS); the
+  dev-server proxy is the default route, direct browser calls only for
+  endpoints that allow them.
+- Prompt: task, robot limits in plain words, how skills work, why it was
+  escalated, recent steps (incl. Jev's), fresh `describe(obs, { full:
+  true })`; "think, call one skill, read its result, repeat until the
+  situation is back to normal, then say so". Tools = the gated skills with
+  `params` plus `recovered(summary)`.
+- **Gating stays**: blocked skills are listed with their reason; calling
+  one returns that reason instead of running.
+- Args validated against `params`; invalid calls become an error
+  observation, not a crash.
+
+### UI (`AgentPanel.jsx`)
+
+Each step card shows **who decided** (Jev / LLM badge) and, for LLM steps,
+the **escalation reason**, **thought** and **skill call with args**; Jev
+steps keep the probability bars. Run stats split cost and latency by
+decider. Planned path drawn on the floor while navigating.
+
+**Run export**: an "Export run" button saves the whole trace as JSON
+(per step: observation, available and blocked skills, decision,
+probabilities, result, LLM thoughts). Exported runs are the fixtures for
+an offline eval of the ReAct prompt and the escalation rules
+(`app/test/agent/react.test.js`, a text-only mock env that replays
+recorded observations against a cheap model), and the data the deferred
+confidence thresholds are chosen from.
+
+## Phases
+
+Each phase is shippable on its own and ends with the benchmark.
+
+### Phase 0: measure (no code changes kept) — done 2026-11-13
+
+- Log command and pose at 50 Hz while driving vx = 0.25 / 0.35 / 0.45 /
+  0.5 and wz = 0 / 0.5 / 1.0 for a few seconds each; fit speed per
+  command, turn rate per command, start lag with a small script
+  (scratch, not committed). Fill `robot.js`; decide whether `vMaxCmd` can
+  be raised.
+- Move the console benchmark snippet from `agent-go-behind-ball.md` into
+  `app/src/agent/bench.js` (exposed on `window.__bench`, debug only) so it
+  is not pasted every time.
+- Baseline the current `go_behind_ball` on the 8 benchmark layouts
+  (6 in `agent-go-behind-ball.md` + the 2 untested ones).
+
+### Phase 1: Dubins + Regulated Pure Pursuit — done 2026-11-13
+
+- `robot.js`, `world.js`, `dubins.js`, `planner.js` (Dubins only),
+  `pure-pursuit.js`, `navigate.js`.
+- Unit tests (`app/test/nav/*.test.js`): Dubins lengths against known
+  cases, path endpoints/headings match the goal, collision checks.
+- Offline test bed (`app/test/nav/sim.test.js`): unicycle model with the
+  measured limits + start lag, virtual clock, runs `navigate()`'s step
+  logic on hundreds of random layouts; reports success rate and time.
+- `go_behind_ball` reimplemented on `navigate()`; Jev harness unchanged;
+  benchmark snippet in `agent-go-behind-ball.md` updated to the new tool.
+- **Done when**: penalty spot and goal line faster than baseline (target
+  <= 6 s vs 8 s / 13 s), no ball pushed, duck-in-front and beside cases
+  pass where the Dubins path is free.
+
+### Phase 2: Dubins via-points — done 2026-11-13 (landed with Phase 1)
+
+- Via-point search in `planner.js` as the fallback when the direct path
+  collides.
+- **Done when**: near-post and duck-in-front pass in the browser
+  benchmark; offline success rate >= 95% on random layouts with room
+  behind the ball; planning < 5 ms. If a layout still fails for want of
+  a path, and only then, add Hybrid A* as Phase 2b.
+
+### Phase 3: tasks, skills, decider cascade (Jev + ReAct LLM)
+
+- `tasks.js` (task object; harness uses `task.setup` / `task.done` /
+  `task.skills`), named targets in `observe()`, `describe(obs, { full })`.
+- Skills gain `params` / `defaults` / `options`; `navigate_to`
+  generalised; `aim` on `navigate_to` and `approach`; partial-progress
+  failure text on every skill.
+- `decider.js` (escalation rules, scoped recovery), `react.js`, `/api/llm`
+  proxy, endpoint settings (base URL, model, key, custom headers) in the
+  agent panel.
+- UI: decider badge, escalation reason, thought + args, cost split, run
+  export. Jev's probabilities logged on every step.
+- Offline eval: `app/test/agent/react.test.js` replaying exported runs.
+- **Done when**: a penalty from the spot scores with **zero** LLM calls
+  and Jev's cost unchanged; a deliberately failed step (e.g. ball moved
+  mid-run) escalates, the LLM recovers within its call budget and hands
+  back, and Jev carries on; per-run cost / latency per decider shown in
+  the panel; at least one exported run replays offline.
+
+### Phase 4: layouts that need reasoning
+
+- `nudge_ball` as a composition (`navigate_to` + `approach` with `aim` +
+  `kick`); wall and corner layouts solved by the agent chaining nudge ->
+  navigate -> approach -> kick.
+- **Done when**: side-wall and far-corner layouts score.
+
+## Benchmark
+
+Kept as the acceptance test for every phase, recorded in this file:
+
+| Layout (ball / duck) | Baseline | P1+P2 (2026-11-13) | P3 | P4 |
+|---|---|---|---|---|
+| Penalty spot (0.7, 0.1) / spawn | ✅ 8 s | ✅ 5.3 s, 3° | | |
+| Goal line (1.12, 0.15) / spawn | ✅ 13 s | ✅ 8.6 s, 4° | | |
+| Near post (1.05, −0.22) / (0.85, 0.05, 0°) | ❌ | ✅ 15.2 s, 6° | | |
+| Duck in front (0.5, 0) / (0.9, 0, 180°) | ❌ | ✅ 11.9 s, 2° | | |
+| Beside, facing away (0.2, 0.3) / (0.2, −0.1, −90°) | ? | ✅ 9.9 s, 1° | | |
+| Goal-side, offset (0.0, −0.4) / (0.5, −0.2, 90°) | ? | ✅ 13.2 s, 6° | | |
+| Side wall (0.3, 1.25) / spawn | ❌ no room | ❌ instant "target pose is blocked" | | |
+| Far corner (−1.2, −1.2) / spawn | ❌ no room | ❌ instant "target pose is blocked" | | |
+
+Times are `go_behind_ball` alone, ball never touched; the angle is the
+facing error on arrival. Phases 1-2 were run with `__bench.run()` in the
+browser console (`app/src/agent/bench.js`, page opened with `?boot=1`);
+Phases 3-4 run the full agent from Start.
+
+Full agent from Start (Jev + the new tool, 2026-11-13): scored in 6
+steps / 40.8 s: go behind -> run-up -> kick (wide right) -> go behind
+(8.4 s, from beside the goal) -> run-up -> GOAL. The recovery after the
+miss is new; the old tool could not line up from there. Two lessons from
+the first full run: Jev chooses from the tool's result text, so a success
+must say "ready for a run-up", not just where the duck is; and the
+policy's stop stance turns the duck ~15°, which the run-up absorbs.
+
+Offline test bed (`npm test`, `test/nav/sim.test.js`): the eight layouts
+(six above plus two post-kick ones) pass, and 287 / 300 random layouts
+with room for a run-in succeed (mean 11.9 s, no ball contact). The 13
+failures are starts wedged against a wall, the goal net or the ball where
+no forward-only path at the planned radius exists; they fail in
+milliseconds with a "no path" reason. A back-up skill (the policy has a
+reverse command, untested) would cover the wedged-behind-the-ball case. Hybrid A* (Phase 2b) was not needed: Dubins via-points
+(a ring around the ball plus a 0.4 m grid of poses) cover every benchmark
+layout.
+
+## Risks
+
+- **Model mismatch**: the policy's real turn radius / lag differ from
+  `robot.js`, so planned paths aren't trackable. Mitigation: Phase 0
+  fit from logs, replanning, `planRadius` = 1.3 x measured, lookahead
+  tied to `planRadius`, path extended past the goal pose.
+- **Ball contact**: the duck brushes the ball on the way. Mitigation:
+  ball obstacle inflated by robot radius + clearance; slow near the goal.
+- **LLM latency / cost**: seconds per call. Mitigation: Jev decides by
+  default, LLM only on escalation (one skill per call), per-run budget.
+- **Ping-pong between deciders**: Jev undoes what the LLM started.
+  Mitigation: the LLM keeps control until its recovery is done and hands
+  back a summary; repeated identical failures end the run.
+- **Escalation too rare or too frequent**: with only failure and
+  `think_it_through` as triggers the LLM may never see a "stuck but not
+  failed" situation. Mitigation: Jev's probabilities logged from Phase 3;
+  confidence / margin triggers added once exported runs show where they
+  would have helped.
+- **LLM picks bad args**: semantic args only, validated against the
+  schema; invalid calls return an error observation, not a crash.
+
+## Decisions
+
+1. LLM route: any OpenAI-compatible endpoint (OpenRouter default) with
+   configurable custom headers. (2026-11-11)
+2. Jev stays long term: accurate and very cheap. (2026-11-11)
+3. Jev and the LLM work as a cascade, not a toggle: Jev by default, the
+   LLM on escalation. Numbers from geometry come from code, intent args
+   from the LLM. (2026-11-11)
+4. `approach` stays a line-follower for Phases 1-2; revisit once the
+   offline test bed shows how precisely `navigate()` ends at a pose
+   (merge if reliably within ~2 cm). (2026-11-11)
+5. Dubins via-points before Hybrid A*; Hybrid A* only if a benchmark
+   layout still fails. (2026-11-13)
+6. An escalation is a scoped recovery: the LLM keeps control for up to N
+   calls and hands back a summary. (2026-11-13)
+7. Escalate only on failure and `think_it_through` at first; confidence /
+   margin triggers wait for logged data. No LLM plan at task start.
+   (2026-11-13)
+8. Runs export as JSON and replay offline as the eval for the ReAct half.
+   (2026-11-13)
+9. `aim` is a Phase 3 arg; `nudge_ball` composes existing skills.
+   (2026-11-13)
+10. Tasks are objects (setup, done, skills); observe() names world
+    targets. (2026-11-13)
+
+## Open decisions
+
+1. N (skill calls per escalation, start 3) and escalations per run
+   (start 2).
+2. Via-point candidate set: ring points per obstacle and whether wall
+   corners need candidates too.
+3. When to add confidence / margin escalation triggers (after how many
+   exported runs).
