@@ -52,6 +52,7 @@ import { AgentSource } from "./controls/agent.js";
 import { goalColliders, makeGoalMesh } from "./goal.js";
 import * as fx from "./fx/fx-wireframe.js";
 import { createWaypointMarker } from "./fx/waypoint-marker.js";
+import { createPathLine } from "./fx/path-line.js";
 import { createShotLine } from "./fx/shot-line.js";
 import { createCeremony, CAM_RESET_S } from "./ceremony.js";
 import {
@@ -1665,6 +1666,8 @@ async function boot({ scene, camera, renderer }) {
   // frame in frame() from waypointSource.target.
   const waypointMarker = createWaypointMarker();
   scene.add(waypointMarker.group);
+  const pathLine = createPathLine(); // the agent's planned path
+  scene.add(pathLine.object);
   // Agent shooting line (fx/shot-line.js), shown while an agent run is live.
   const shotLine = createShotLine();
   scene.add(shotLine.object);
@@ -2226,6 +2229,7 @@ async function boot({ scene, camera, renderer }) {
       setCommand: (vx, wz) => agentSource.set(vx, wz),
       stop: () => agentSource.stop(),
       showTarget: (xy) => { agentTarget = xy; },
+      showPath: (points) => pathLine.set(points),
       kick: (foot) => triggerKick(foot, "agent"),
       resetDuck: () => resetSim(),
       placeBall: (x, y) => spawnBall({ at: [x, y] }),

@@ -14,6 +14,7 @@ import { TOOLS } from "./tools.js";
 import { decide } from "./system-one.js";
 import { isBallInGoal } from "../game/goal.js";
 import { checkpoint, endRun, resetControl, setPaused, RunEnded } from "./run-control.js";
+import "./bench.js"; // window.__bench debug helpers
 
 export const TASKS = {
   penalty: {

@@ -15,25 +15,20 @@
 //   - the kick policies are blind and shoot along the duck's heading, and
 //     only connect with the ball 7-11 cm ahead, 2.5-7.5 cm out to the
 //     kicking foot's side (observe.js KICK_FWD / KICK_LAT).
-// Hence the play: get behind the ball -> walk up the shooting line offset
-// to one foot's side (heading lines up on the way) -> kick with that foot.
+// Hence the play: get behind the ball (planned path, nav/) -> walk up the
+// shooting line offset to one foot's side (heading lines up on the way) ->
+// kick with that foot.
 import { observe, wrapPi, kickableFoot } from "./observe.js";
 import { checkpoint } from "./run-control.js";
+import { stagingPoses, fieldWorld } from "./field.js";
+import { makeNav } from "../nav/navigate.js";
 import { GOAL } from "../game/goal.js";
-import { ARENA_HALF } from "../game/constants.js";
 
 const TICK_MS = 20; // tool control rate (the policy itself runs at 50 Hz)
 const WALK = 0.25; // m/s, the one walking speed (see above)
 const TURN_GAIN = 2.5; // rad/s of turn per rad of heading error
 const MAX_TURN = 1.0; // rad/s, walking policy limit
 
-const STAGE_BACK = 0.5; // m behind the ball where run-ups start
-const FAR_BACK = 0.75; // m behind the ball, entry point of the line-up walk
-const MIN_ROOM = 0.55; // m of free floor behind the ball a line-up needs
-const SIDE_CLEAR = 0.35; // m beside the ball when detouring around it
-const WAYPOINT_RADIUS = 0.2; // m, arrival radius for detour / entry points
-const LINEUP_LOOKAHEAD = 0.3; // m, > the duck's ~0.2 m turning radius
-const FIELD_LIMIT = ARENA_HALF - 0.15; // m, keep waypoints off the walls
 const FOOT_OFFSET = 0.05; // m sideways: puts the ball in front of one foot
 const LOOKAHEAD = 0.15; // m, line-following lookahead
 const KICK_STOP = 0.095; // m, ball distance ahead where the approach stops
@@ -44,16 +39,20 @@ const clamp = (v, lim) => Math.max(-lim, Math.min(lim, v));
 const done = (text) => ({ ok: true, text });
 const failed = (text) => ({ ok: false, text });
 
-// Run a control law until it reports done. step(obs) returns [vx, wz] to
-// keep going, or null when finished. target(obs), if given, is the floor
-// point shown as the agent's intent. Resolves true if it finished, false
-// on timeout. A pause holds the duck still and doesn't count toward the
-// timeout; a stop ends the loop by throwing (run-control.js).
+// Run a control law until it reports done. step(obs, elapsedS) returns
+// [vx, wz] to keep going, or null when finished. target(obs), if given, is
+// the floor point shown as the agent's intent. Resolves true if it
+// finished, false on timeout. A pause holds the duck still and doesn't
+// count toward the timeout or the elapsed time; a stop ends the loop by
+// throwing (run-control.js).
 async function drive(env, step, timeoutS, target) {
-  let end = performance.now() + timeoutS * 1000;
+  const start = performance.now();
+  let end = start + timeoutS * 1000, paused = 0;
   try {
     while (performance.now() < end) {
-      end += await checkpoint(() => env.stop());
+      const waited = await checkpoint(() => env.stop());
+      end += waited;
+      paused += waited;
       // Ball mid-respawn (the game's escape watchdog): hold still.
       if (!env.getBallPos()) {
         env.stop();
@@ -62,7 +61,7 @@ async function drive(env, step, timeoutS, target) {
       }
       const obs = observe(env);
       if (target) env.showTarget(target(obs));
-      const cmd = step(obs);
+      const cmd = step(obs, (performance.now() - start - paused) / 1000);
       if (!cmd) return true;
       env.setCommand(cmd[0], cmd[1]);
       await sleep(TICK_MS);
@@ -102,41 +101,24 @@ function shootingLine(obs, foot) {
   };
 }
 
-// Waypoints on the way behind the ball (all follow the ball if it moves):
-// staging spot where run-ups start, the far entry point of the line-up
-// walk, and a detour point beside the ball, on the duck's side, that keeps
-// the duck from walking through the ball. sideSpot is null (skipped) once
-// the duck is already behind the ball.
-const stagingSpot = (obs) => shootingLine(obs, null).at(-STAGE_BACK);
-const farSpot = (obs) => shootingLine(obs, null).at(-Math.min(FAR_BACK, roomBehind(obs)));
-
-// Free floor behind the ball along the shooting line before the walls.
-function roomBehind(obs) {
-  const back = [-Math.cos(obs.shotHeading), -Math.sin(obs.shotHeading)];
-  let room = Infinity;
-  for (let k = 0; k < 2; k++) {
-    if (Math.abs(back[k]) < 1e-6) continue;
-    const wall = back[k] > 0 ? FIELD_LIMIT : -FIELD_LIMIT;
-    room = Math.min(room, (wall - obs.ballPos[k]) / back[k]);
+// Plan a path to goalFn(obs) (a pose, or poses best first) and follow it
+// (nav/navigate.js), drawing the path on the floor. Resolves { ok, text,
+// data } with how far it got.
+async function navigate(env, goalFn, timeoutS) {
+  const nav = makeNav(goalFn, { world: fieldWorld });
+  let result = null, shown = null;
+  try {
+    const finished = await drive(env, (obs, elapsedS) => {
+      const out = nav.step(obs, elapsedS);
+      if (nav.path !== shown) env.showPath((shown = nav.path));
+      if (out.done) { result = out.done; return null; }
+      return out.cmd;
+    }, timeoutS, () => nav.goal && [nav.goal[0], nav.goal[1]]);
+    if (!finished) result = nav.timedOut(observe(env)).done;
+  } finally {
+    env.showPath(null);
   }
-  return room;
-}
-function sideSpot(obs) {
-  const line = shootingLine(obs, null);
-  if (line.s < -0.3) return null;
-  const h = obs.shotHeading, side = line.offset >= 0 ? 1 : -1;
-  return [
-    obs.ballPos[0] - Math.cos(h) * 0.15 - Math.sin(h) * side * SIDE_CLEAR,
-    obs.ballPos[1] - Math.sin(h) * 0.15 + Math.cos(h) * side * SIDE_CLEAR,
-  ];
-}
-
-// Walk until within `radius` of target(obs); a null target is skipped.
-function walkTo(env, target, radius) {
-  return drive(env, (obs) => {
-    const p = target(obs);
-    return !p || Math.hypot(p[0] - obs.duck[0], p[1] - obs.duck[1]) < radius ? null : steerToward(obs, p);
-  }, 10, target);
+  return result;
 }
 
 async function approachForKick(env, foot) {
@@ -197,28 +179,10 @@ export const TOOLS = {
     description: "Walk to a spot about half a metre behind the ball, on the line from the goal through the ball, to get room for a run-up.",
     blocker: () => null,
     run: async (env) => {
-      // The duck can't turn in place or walk around the ball on its own:
-      // 1. if it isn't behind the ball yet, detour past the ball's side;
-      // 2. walk to a point well behind the ball (as far as the walls allow);
-      // 3. walk up the shooting line to the staging spot, which leaves it
-      //    on the line and facing the goal. If it gets near the ball without
-      //    lining up, give up rather than push the ball.
-      if (roomBehind(observe(env)) < MIN_ROOM) {
-        return failed("no room to line up: the ball is too close to a wall");
-      }
-      if (!await walkTo(env, sideSpot, WAYPOINT_RADIUS)) return failed("timed out walking around the ball");
-      if (!await walkTo(env, farSpot, WAYPOINT_RADIUS)) return failed("timed out walking behind the ball");
-      let overshot = false;
-      const lined = await drive(env, (obs) => {
-        const line = shootingLine(obs, null);
-        const onLine = Math.abs(line.offset) < 0.08 && Math.abs(obs.facingErr) < 0.4;
-        if (line.s >= -STAGE_BACK && onLine) return null;
-        if (line.s > -0.3) { overshot = true; return null; }
-        return steerToward(obs, line.at(line.s + LINEUP_LOOKAHEAD));
-      }, 8, stagingSpot);
-      if (overshot) return failed("got close to the ball without lining up");
-      return lined ? done("standing behind the ball facing the goal, ready for a run-up")
-        : failed("timed out lining up behind the ball");
+      const res = await navigate(env, stagingPoses, 30);
+      // Say what the result means for the play, not just where the duck is:
+      // System One picks the next tool from this text.
+      return res.ok ? { ...res, text: `standing behind the ball facing the goal, ready for a run-up (${res.text})` } : res;
     },
   },
   approach_left_foot: {

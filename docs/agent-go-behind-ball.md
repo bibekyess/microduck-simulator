@@ -1,9 +1,12 @@
 # Agent notes: making "Go behind ball" reliable
 
-Status (2026-11-08): **open**. The penalty from the spot works reliably;
-`go_behind_ball` (`app/src/agent/tools.js`) still fails when the duck starts
-close to the ball, in front of it, or when the ball is against a wall. This
-note records what was measured and tried, so the work can be picked up later.
+Status (2026-11-13): **superseded** by `agent-nav-react-plan.md`.
+`go_behind_ball` now plans a Dubins path and follows it with pure pursuit
+(`app/src/nav/`); every layout below except the wall cases passes, and the
+benchmark lives in `app/src/agent/bench.js` (`__bench.run()` in the
+console) instead of the snippet here. The measurements in this note were
+partly wrong (see the plan's robot model: the walk is ~0.16 m/s and turn
+commands above 1.0 rad/s work). Kept for the history of what was tried.
 
 ## What the tool has to do
 
