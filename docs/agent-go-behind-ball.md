@@ -21,7 +21,7 @@ harness, and drive every design decision:
 
 | Fact | Value |
 |---|---|
-| Turn in place (vx = 0, wz = 1.0) | ~2° in 3 s: effectively impossible |
+| Turn in place (vx = 0, wz = 1.0) | ~2° in 3 s: effectively impossible (but wz ≥ 2.0 pivots fine, see agent-nav-react-plan.md) |
 | Minimum forward command that steps | ~0.22 m/s (below: stands still) |
 | Actual speed at vx = 0.25 | ~0.1 m/s, after ~0.5 s to start |
 | Turn rate while walking at wz = 1.0 | ~0.6 rad/s, so turns are ~0.2 m wide |

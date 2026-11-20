@@ -22,6 +22,10 @@ export const CASES = [
   { name: "goal-side, offset", ball: [0.0, -0.4], duck: [0.5, -0.2, Math.PI / 2] },
   { name: "side wall", ball: [0.3, 1.25], duck: SPAWN },
   { name: "far corner", ball: [-1.2, -1.2], duck: SPAWN },
+  // Starts that need a pivot (added 2026-11-20 with the pivot planner).
+  { name: "wedged behind the ball", ball: [1.0, 0.05], duck: [0.85, 0.0, 0.1] },
+  { name: "duck in a corner", ball: [0.7, 0.1], duck: [1.35, 1.35, Math.PI / 4] },
+  { name: "duck facing the back wall", ball: [0.7, 0.1], duck: [-1.35, 0.3, Math.PI] },
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -55,27 +59,31 @@ export async function run(names) {
     await sleep(300);
     await waitFor(() => env.getBallPos());
     await sleep(600);
-    const b0 = env.getBallPos(), t0 = performance.now();
+    const b0 = env.getBallPos(), t0 = window.rl.data.time; // sim clock: a slow tab runs below real time
     const res = await TOOLS.navigate_to.run(env, { ...TOOLS.navigate_to.defaults });
     const b1 = env.getBallPos() ?? b0, o = observe(env);
-    rows.push(`${c.name}: ${res.ok ? "OK" : "FAIL"} ${((performance.now() - t0) / 1000).toFixed(1)}s, ${res.text}, ` +
-      `ball pushed ${Math.hypot(b1[0] - b0[0], b1[1] - b0[1]).toFixed(2)} m, facing err ${Math.round(o.facingErr * 57.3)}°`);
+    rows.push(`${c.name}: ${res.ok ? "OK" : "FAIL"} ${(window.rl.data.time - t0).toFixed(1)}s, ${res.text}, ` +
+      `ball pushed ${Math.hypot(b1[0] - b0[0], b1[1] - b0[1]).toFixed(2)} m, facing err ${Math.round(o.facingErr * 57.3)}°, pivots ${res.data?.pivots ?? 0}`);
   }
   window.__bench.done = true;
   return rows;
 }
 
-// Hold one (vx, wz) command and log the pose at 50 Hz. Steady state is
+// Hold one (vx, wz) command and log the pose (up to 50 Hz). Steady state is
 // taken over the second half; lag is the time to reach half the steady
 // speed.
 export async function measure(vx, wz, seconds = 4) {
   const env = gameApi.agentEnv;
   await freshDuck(env);
+  // Timed on the sim clock, not the wall clock: a slow tab (headless,
+  // software GL) runs the physics below real time, and wall-clock rates
+  // would then read near zero.
   const log = [];
-  const t0 = performance.now();
+  const simNow = () => window.rl.data.time;
+  const t0 = simNow();
   env.setCommand(vx, wz);
-  while (performance.now() - t0 < seconds * 1000) {
-    log.push({ t: (performance.now() - t0) / 1000, pose: env.getDuckPose() });
+  while (simNow() - t0 < seconds) {
+    log.push({ t: simNow() - t0, pose: env.getDuckPose() });
     await sleep(20);
   }
   env.stop();

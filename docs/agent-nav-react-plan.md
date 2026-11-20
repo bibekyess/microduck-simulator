@@ -1,9 +1,10 @@
 # Plan: navigation stack + Jev / ReAct decider cascade
 
-Status (2026-11-13): **Phases 0-2 and 3a done** (nav stack in
+Status (2026-11-20): **Phases 0-2, 2b and 3a done** (nav stack in
 `app/src/nav/`, `navigate_to` on it, offline test bed, browser benchmark
-below; tasks as objects, skills with params / defaults / options, `aim`,
-run export and offline replay); Phase 3b (the decider cascade) next. Supersedes the "Ideas for next time" in
+below; pivot-aware planner that cannot be trapped by corners or walls;
+tasks as objects, skills with params / defaults / options, `aim`, run
+export and offline replay); Phase 3b (the decider cascade) next. Supersedes the "Ideas for next time" in
 `agent-go-behind-ball.md`. Amended 2026-11-13 after review (Decisions
 5-10): via-points before Hybrid A*, scoped LLM recovery, fewer escalation
 triggers, run export, `aim` pulled forward, tasks as objects.
@@ -63,7 +64,7 @@ Pure functions, no imports from `game/` or the DOM, so they run under
 | `nav/world.js` | World model: walls + circular obstacles, `isFree(pose, path)` |
 | `nav/dubins.js` | Dubins shortest path between two poses (6 word types: LSL, RSR, LSR, RSL, RLR, LRL), sampling to a polyline |
 | `nav/planner.js` | `plan(start, goal, world)`: direct Dubins, then Dubins via-points (Phase 2), else `null` |
-| `nav/hybrid-astar.js` | Only if a benchmark case still fails after via-points: Hybrid A* over (x, y, heading) |
+| (`nav/planner.js`, Phase 2b) | Pivot-first plans and a grid A* fallback walked as pivot -> straight legs (replaced the Hybrid A* idea once pivots were measured) |
 | `nav/pure-pursuit.js` | Regulated Pure Pursuit: path + pose -> `[vx, wz]` |
 | `nav/navigate.js` | `navigate(env, goalFn, opts)`: plan, follow, replan, report |
 
@@ -97,8 +98,23 @@ state over the second half):
 Reverse (measured the same way): `vx = -0.2` and `-0.3` with `wz = 0`
 do not move the duck at all; with a turn command added it walks
 *forward* in a curve (0.15 m/s, 0.63 rad/s). So there is no back-up
-skill to be had from this policy, and a duck wedged right behind the
-ball stays a "no path" case.
+skill to be had from this policy.
+
+**Pivot on the spot** (measured 2026-11-20, `vx = 0`, timed on the sim
+clock): the earlier "turn in place is impossible" came from `wz = 1.0`,
+which really does barely turn (0.1 rad/s). Higher commands pivot:
+
+| wz cmd | 90° in | 180° in | max drift | fell |
+|---|---|---|---|---|
+| 1.5 | 2.0 s | 4.0 s | 3.8 cm | no |
+| 2.0 | 1.4 s | 2.8 s | 2.3 cm | no |
+| 2.5 | 1.1 s | 2.2 s | 3.9 cm | no |
+| 3.0 | 0.9 s | 1.8 s | 4.0 cm | no |
+| -2.5 | 1.0 s | 2.2 s | 6.1 cm | no |
+
+`robot.js` pivots at 2.5 (~1.4 rad/s), stopping 0.25 rad early for the
+lag. A duck that can pivot is never trapped: it can always face open
+floor and walk out (Phase 2b below).
 
 The duck stayed up in every row. Two things the earlier notes had wrong:
 the walk is ~0.16 m/s at the 0.25 command (not 0.1), and the policy takes
@@ -384,6 +400,30 @@ Each phase is shippable on its own and ends with the benchmark.
   behind the ball; planning < 5 ms. If a layout still fails for want of
   a path, and only then, add Hybrid A* as Phase 2b.
 
+### Phase 2b: pivots, never stuck — done 2026-11-20
+
+- Measured the pivot (table under Robot model) and added it to
+  `robot.js`. `bench.measure()` and `bench.run()` now time on the sim
+  clock, so headless runs (software GL, below real time) give true rates.
+- Plans are legs: `{ type: "pivot", heading }` or `{ type: "follow",
+  points }`. `plan()` tries, cheapest first: (1) Dubins direct / via, as
+  before; (2) pivot to one of 16 headings, then a direct Dubins path,
+  chosen when it saves > 1 s over (1); (3) grid A* (4 cm cells) smoothed
+  to straight lines, walked pivot -> straight -> ... -> pivot -> run-in.
+  (3) succeeds whenever the start and goal are in the same free region,
+  so the only remaining failures are a blocked goal pose (Phase 4) or a
+  goal walled off entirely.
+- `makeNav` walks the legs: a pivot leg commands `[0, ±pivotCmd]` until
+  within `pivotLead`; intermediate straights hand over near their end;
+  arrival is judged on the final leg as before. Results report `pivots`.
+- Tests: pivot-first and L-corridor (grid tier) planner tests; the
+  offline test bed models the pivot, starts right up to the walls, and
+  checks every corner and wall start. The wedged-behind-the-ball test now
+  expects success instead of a fast "no path".
+- **Result**: offline 300 / 300 random layouts (was 287), mean 11.1 s
+  (was 11.9), 12 / 12 corner and wall starts. Browser: every reachable
+  benchmark layout passes, plus three new pivot cases (column below).
+
 ### Phase 3a: tasks, skills, export (no LLM) — done 2026-11-13
 
 - `tasks.js` (task object; harness uses `task.setup` / `task.done` /
@@ -422,27 +462,31 @@ Each phase is shippable on its own and ends with the benchmark.
 - `nudge_ball` as a composition (`navigate_to` + `approach` with `aim` +
   `kick`); wall and corner layouts solved by the agent chaining nudge ->
   navigate -> approach -> kick. No back-up skill: the policy does not
-  reverse (measured 2026-11-13).
+  reverse (measured 2026-11-13); pivots (Phase 2b) cover turning round.
 - **Done when**: side-wall and far-corner layouts score.
 
 ## Benchmark
 
 Kept as the acceptance test for every phase, recorded in this file:
 
-| Layout (ball / duck) | Baseline | P1+P2 (2026-11-13) | P3 | P4 |
-|---|---|---|---|---|
-| Penalty spot (0.7, 0.1) / spawn | ✅ 8 s | ✅ 5.3 s, 3° | | |
-| Goal line (1.12, 0.15) / spawn | ✅ 13 s | ✅ 8.6 s, 4° | | |
-| Near post (1.05, −0.22) / (0.85, 0.05, 0°) | ❌ | ✅ 15.2 s, 6° | | |
-| Duck in front (0.5, 0) / (0.9, 0, 180°) | ❌ | ✅ 11.9 s, 2° | | |
-| Beside, facing away (0.2, 0.3) / (0.2, −0.1, −90°) | ? | ✅ 9.9 s, 1° | | |
-| Goal-side, offset (0.0, −0.4) / (0.5, −0.2, 90°) | ? | ✅ 13.2 s, 6° | | |
-| Side wall (0.3, 1.25) / spawn | ❌ no room | ❌ instant "target pose is blocked" | | |
-| Far corner (−1.2, −1.2) / spawn | ❌ no room | ❌ instant "target pose is blocked" | | |
+| Layout (ball / duck) | Baseline | P1+P2 (2026-11-13) | P2b pivots (2026-11-20) | P3 | P4 |
+|---|---|---|---|---|---|
+| Penalty spot (0.7, 0.1) / spawn | ✅ 8 s | ✅ 5.3 s, 3° | ✅ 5.1 s, 2° | | |
+| Goal line (1.12, 0.15) / spawn | ✅ 13 s | ✅ 8.6 s, 4° | ✅ 9.0 s, 1° | | |
+| Near post (1.05, −0.22) / (0.85, 0.05, 0°) | ❌ | ✅ 15.2 s, 6° | ✅ 9.5 s, 4°, 1 pivot | | |
+| Duck in front (0.5, 0) / (0.9, 0, 180°) | ❌ | ✅ 11.9 s, 2° | ✅ 9.5 s, 13°, 1 pivot | | |
+| Beside, facing away (0.2, 0.3) / (0.2, −0.1, −90°) | ? | ✅ 9.9 s, 1° | ✅ 9.9 s, 2° | | |
+| Goal-side, offset (0.0, −0.4) / (0.5, −0.2, 90°) | ? | ✅ 13.2 s, 6° | ✅ 13.2 s, 8° | | |
+| Side wall (0.3, 1.25) / spawn | ❌ no room | ❌ instant "target pose is blocked" | ❌ same (Phase 4) | | |
+| Far corner (−1.2, −1.2) / spawn | ❌ no room | ❌ instant "target pose is blocked" | ❌ same (Phase 4) | | |
+| Wedged behind the ball (1.0, 0.05) / (0.85, 0, 6°) | | ❌ "no path" | ✅ 9.5 s, 1°, 1 pivot | | |
+| Duck in a corner (0.7, 0.1) / (1.35, 1.35, 45°) | | | ✅ 14.8 s, 13°, 1 pivot | | |
+| Duck facing the back wall (0.7, 0.1) / (−1.35, 0.3, 180°) | | | ✅ 11.0 s, 3°, 1 pivot | | |
 
 Times are `go_behind_ball` alone, ball never touched; the angle is the
-facing error on arrival. Phases 1-2 were run with `__bench.run()` in the
-browser console (`app/src/agent/bench.js`, page opened with `?boot=1`);
+facing error on arrival. Phase 2b times are on the sim clock (headless
+Chromium, rendering throttled to 2 fps so the physics keeps up). Phases
+1-2 were run with `__bench.run()` in the browser console (`app/src/agent/bench.js`, page opened with `?boot=1`);
 Phases 3-4 run the full agent from Start.
 
 Full agent from Start (Jev + the new tool, 2026-11-13): scored in 6
@@ -458,10 +502,9 @@ Offline test bed (`npm test`, `test/nav/sim.test.js`): the eight layouts
 with room for a run-in succeed (mean 11.9 s, no ball contact). The 13
 failures are starts wedged against a wall, the goal net or the ball where
 no forward-only path at the planned radius exists; they fail in
-milliseconds with a "no path" reason. A back-up skill (the policy has a
-reverse command, untested) would cover the wedged-behind-the-ball case. Hybrid A* (Phase 2b) was not needed: Dubins via-points
-(a ring around the ball plus a 0.4 m grid of poses) cover every benchmark
-layout.
+milliseconds with a "no path" reason. Since Phase 2b (pivots) the test
+bed starts the duck right up to the walls and gets 300 / 300 (mean
+11.1 s), plus 12 / 12 corner and wall starts.
 
 ## Risks
 
@@ -514,12 +557,17 @@ layout.
     (2026-11-13)
 12. No back-up skill: the walking policy ignores reverse commands.
     (2026-11-13)
+13. The planner must never leave the duck stuck: it pivots on the spot
+    (`wz` 2.5, measured) and falls back to grid A* with pivots instead of
+    Hybrid A*. Normal play still prefers smooth curves; a pivot is used
+    only when it saves > 1 s or nothing else fits. (2026-11-20)
+14. LLM limits: up to 3 skill calls per escalation, 2 escalations per
+    run, to be revisited with exported runs. (2026-11-20)
+15. Confidence / margin escalation: decided from ~20-30 exported runs
+    that include hard layouts; the threshold must never fire on a normal
+    penalty (zero LLM calls), and is skipped if no threshold separates
+    failing from succeeding steps. (2026-11-20)
 
 ## Open decisions
 
-1. N (skill calls per escalation, start 3) and escalations per run
-   (start 2).
-2. Via-point candidate set: ring points per obstacle and whether wall
-   corners need candidates too.
-3. When to add confidence / margin escalation triggers (after how many
-   exported runs).
+None open; 1-3 were settled as Decisions 13-15.

@@ -1,5 +1,5 @@
-// Offline test bed: a unicycle with the measured command -> motion maps and
-// a first-order lag stands in for the walking policy, a virtual clock
+// Offline test bed: a unicycle with the measured command -> motion maps
+// (walking on curves, pivoting on the spot) and a first-order lag stands in for the walking policy, a virtual clock
 // stands in for the sim, and the real observe() + field + nav code runs
 // against it on hundreds of random penalty layouts.
 import test from "node:test";
@@ -27,7 +27,9 @@ export function simulate(duck, ball, { timeoutS = 45 } = {}) {
     if (out.done) return { ...out.done, timeS: t, pushed };
     const [vx, wz] = out.cmd;
     const vT = actualSpeed(vx);
-    const wT = vT > 0 ? wz * ROBOT.turnPerCmd : 0;
+    // Walking: turn rate per command. Standing: pivots at ~0.6 rad/s per
+    // commanded rad/s above pivotMinCmd (measured 2026-11-20), else still.
+    const wT = vT > 0 ? wz * ROBOT.turnPerCmd : Math.abs(wz) >= ROBOT.pivotMinCmd ? wz * 0.58 : 0;
     v += ((vT - v) * DT) / TAU;
     w += ((wT - w) * DT) / TAU;
     x += v * Math.cos(yaw) * DT;
@@ -48,7 +50,7 @@ const span = (lim) => (rnd() * 2 - 1) * lim;
 function layout() {
   for (;;) {
     const ball = [span(ARENA_HALF - 0.3), span(ARENA_HALF - 0.3)];
-    const duck = [span(ARENA_HALF - 0.2), span(ARENA_HALF - 0.2), span(Math.PI)];
+    const duck = [span(ARENA_HALF - 0.12), span(ARENA_HALF - 0.12), span(Math.PI)]; // right up to the walls
     if (Math.hypot(duck[0] - ball[0], duck[1] - ball[1]) < 0.2) continue;
     const obs = observe({ getDuckPose: () => duck, getBallPos: () => ball });
     const world = fieldWorld(obs);
@@ -77,12 +79,27 @@ test("benchmark layouts from the notes", () => {
   console.log(rows.join("\n"));
 });
 
-test("wedged behind the ball: fails fast instead of pushing it", () => {
-  // 15 cm behind the ball there is no forward-only path that doesn't get
-  // closer to it; a back-up skill (Phase 4) is the answer, not wandering.
+test("wedged behind the ball: pivots away and comes round", () => {
+  // 15 cm behind the ball no forward curve stays clear of it; a pivot
+  // turns the duck away first.
   const r = simulate([0.85, 0.0, 0.1], [1.0, 0.05]);
-  assert.ok(!r.ok && r.timeS < 0.1 && r.pushed === 0, `${r.text} after ${r.timeS} s, contact ${r.pushed}`);
-  assert.match(r.text, /no path/);
+  assert.ok(r.ok && r.pushed === 0, `${r.text} after ${r.timeS} s, contact ${r.pushed}`);
+  assert.ok(r.data.pivots >= 1, "expected a pivot");
+});
+
+test("corners and walls: the duck never gets stuck", () => {
+  // Duck pressed into each corner and against each wall, facing it; ball
+  // on the penalty spot. Every one must reach the staging pose.
+  const c = ARENA_HALF - 0.13, rows = [];
+  const starts = [];
+  for (const sx of [-1, 1]) for (const sy of [-1, 1]) starts.push([sx * c, sy * c, Math.atan2(sy, sx)], [sx * c, sy * c, Math.atan2(sy, sx) + 0.6]);
+  for (const [x, y, h] of [[c, 0.8, 0], [-c, 0.3, Math.PI], [0.2, c, Math.PI / 2], [-0.4, -c, -Math.PI / 2]]) starts.push([x, y, h]);
+  for (const duck of starts) {
+    const r = simulate(duck, [0.7, 0.1], { timeoutS: 60 });
+    rows.push(`${duck.map((n) => n.toFixed(2))}: ${r.ok ? "OK" : "FAIL"} ${r.timeS.toFixed(1)} s, pivots ${r.data.pivots}, ${r.text}`);
+    assert.ok(r.ok && r.pushed === 0, `${duck}: ${r.text}`);
+  }
+  console.log(rows.join("\n"));
 });
 
 test("random layouts: success rate and time", () => {
@@ -100,6 +117,6 @@ test("random layouts: success rate and time", () => {
   for (const f of allFails) kinds[f] = (kinds[f] ?? 0) + 1;
   console.log(`random: ${ok}/${N} ok, ${pushed} touched the ball, mean ${(time / ok).toFixed(1)} s, mean replans ${(replans / ok).toFixed(2)}, failures ${JSON.stringify(kinds)}`);
   for (const f of fails) console.log("  fail", JSON.stringify(f));
-  assert.ok(ok / N >= 0.95, `${ok}/${N}`);
+  assert.ok(ok / N >= 0.99, `${ok}/${N}`);
   assert.ok(pushed === 0, `${pushed} layouts touched the ball`);
 });
