@@ -17,9 +17,10 @@
 //                 how far it got, so a decider can diagnose them.
 //
 // Constraints from the policies (measured in the sim):
-//   - the walking policy only steps above ~0.22 m/s and cannot turn in
-//     place, so every move walks at WALK speed and steers while walking;
-//     it stops dead (< 1 cm coast) when the command drops to zero;
+//   - the walking policy only steps above ~0.22 m/s, so the run-up walks at
+//     WALK speed and steers while walking (navigate_to also pivots on the
+//     spot, nav/robot.js); it stops dead (< 1 cm coast) when the command
+//     drops to zero;
 //   - the kick policies are blind and shoot along the duck's heading, and
 //     only connect with the ball 7-11 cm ahead, 2.5-7.5 cm out to the
 //     kicking foot's side (observe.js KICK_FWD / KICK_LAT).
@@ -187,10 +188,11 @@ const TARGETS = {
 };
 
 const AIM_PARAM = {
+  type: "string",
   enum: Object.keys(AIMS),
   description: "Where the shot should go: the goal centre, or its left / right corner as seen facing the goal.",
 };
-const FOOT_PARAM = { enum: ["left", "right"], description: "Which foot kicks." };
+const FOOT_PARAM = { type: "string", enum: ["left", "right"], description: "Which foot kicks." };
 const badAim = (aim) => !AIMS[aim] && failed(`unknown aim "${aim}" (expected ${Object.keys(AIMS).join(", ")})`);
 
 export const TOOLS = {
@@ -201,6 +203,7 @@ export const TOOLS = {
       type: "object",
       properties: {
         target: {
+          type: "string",
           enum: Object.keys(TARGETS),
           description: "behind_ball: about half a metre behind the ball on the shooting line, facing the aim point, ready for a run-up. spawn: the duck's starting spot, facing the goal.",
         },

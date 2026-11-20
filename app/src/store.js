@@ -42,15 +42,20 @@ export const useGame = create(
     // Throttled telemetry block (4 Hz), bottom-right OSD
     telemetry: { fps: 0, ctrlHz: 0, speed: 0, odo: 0, peers: 0 },
     // Agent harness run (src/agent/harness.js), rendered by AgentPanel.
-    // status: "idle" | "running" | "scored" | "failed" | "stopped" | "error"
+    // status: "idle" | "running" | "scored" | "failed" | "stopped" | "stuck" | "error"
     // phase: null | "observe" | "decide" | "act" (current step, while running)
     // task: TASKS id of the current / last run (agent/tasks.js)
     // steps: [{ n, obs: { duck, ballPos } (raw, for offline replay),
     //           observation (describe() text sent to Jev),
     //           options: [{ label, title, skill, args, blocked: reason | null }],
-    //           decidedBy: "jev", choice (option label), skill, args,
-    //           probabilities, confidence, latencyMs, cost,
-    //           ok, result, data, actMs (null while the skill runs) }]
+    //           decidedBy: "jev" | "llm", choice (option label, or the skill
+    //           for the LLM), skill, args, probabilities + confidence (Jev),
+    //           escalation / why / thought (LLM), latencyMs, cost,
+    //           ok, result, data, actMs (null while the skill runs) }
+    //         | { kind: "think", ... } Jev handed over (no skill)
+    //         | { kind: "handback", decidedBy: "llm", summary, recovered,
+    //             calls, requests, cost } end of an LLM recovery]
+    // llmModel: the LLM model of the current run (null when LLM recovery is off)
     // startedAt / endedAt: performance.now() stamps for the run summary.
     agent: {
       task: null, status: "idle", paused: false, phase: null, steps: [], error: null,

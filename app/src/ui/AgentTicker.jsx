@@ -50,11 +50,12 @@ function PhaseRail({ phase }) {
 
 // Headline: the decision being acted on, or what the agent is doing now.
 function Headline({ status, paused, phase, last, steps }) {
+  const tail = steps[steps.length - 1];
   if (status === "scored") {
-    return <Box sx={{ fontFamily: ANTON, fontSize: "1.9rem", color: ORANGE }}>GOAL! · {steps.length} decisions</Box>;
+    return <Box sx={{ fontFamily: ANTON, fontSize: "1.9rem", color: ORANGE }}>GOAL! · {steps.filter((s) => s.skill).length} steps</Box>;
   }
   if (status !== "running") {
-    const text = { failed: "Out of steps", stopped: "Stopped", error: "Error" }[status];
+    const text = { failed: "Out of steps", stopped: "Stopped", error: "Error", stuck: "Stuck" }[status];
     return <Box sx={{ fontFamily: ANTON, fontSize: "1.5rem", color: CREAM }}>{text}</Box>;
   }
   if (paused) {
@@ -63,13 +64,26 @@ function Headline({ status, paused, phase, last, steps }) {
   if (phase !== "act" || !last) {
     return (
       <Box sx={{ fontFamily: ANTON, fontSize: "1.5rem", color: DIM }}>
-        {phase === "decide" ? "System One is choosing…" : "Reading the field…"}
+        {phase === "decide" ? (tail?.decidedBy === "llm" || tail?.kind === "think" ? "The LLM is thinking…" : "System One is choosing…") : "Reading the field…"}
       </Box>
     );
   }
-  const alt = Object.entries(last.probabilities)
+  if (last.decidedBy === "llm") {
+    return (
+      <Box key={last.n} sx={{ animation: `${pop} 0.25s ease-out` }}>
+        <Box sx={{ display: "flex", alignItems: "baseline", gap: "12px" }}>
+          <Box sx={{ fontFamily: ANTON, fontSize: "1.9rem", color: CREAM, lineHeight: 1.1 }}>{titleOf(last, last.choice)}</Box>
+          <Box sx={{ color: "#9b8cff", fontSize: "0.9rem" }}>LLM</Box>
+        </Box>
+        <Box sx={{ fontSize: "0.68rem", color: DIM, mt: "6px" }}>
+          {Object.entries(last.args ?? {}).map(([k, v]) => `${k}: ${v}`).join(" · ")}{last.latencyMs ? ` · ${last.latencyMs} ms` : ""}
+        </Box>
+      </Box>
+    );
+  }
+  const alt = Object.entries(last.probabilities ?? {})
     .filter(([n]) => n !== last.choice).sort((a, b) => b[1] - a[1])[0];
-  const p = last.probabilities[last.choice] ?? last.confidence ?? 0;
+  const p = last.probabilities?.[last.choice] ?? last.confidence ?? 0;
   const open = last.options.filter((o) => !o.blocked).length;
   return (
     <Box key={last.n} sx={{ animation: `${pop} 0.25s ease-out` }}>
@@ -93,8 +107,9 @@ export default function AgentTicker() {
   const menuOpen = useGame((s) => s.menuOpen);
   const { status, paused, phase, steps } = useGame((s) => s.agent);
   if (menuOpen || status === "idle") return null;
-  const last = steps[steps.length - 1];
-  const trail = steps.slice(-7, phase === "act" ? -1 : undefined);
+  const skillSteps = steps.filter((s) => s.skill);
+  const last = skillSteps[skillSteps.length - 1];
+  const trail = skillSteps.slice(-7, phase === "act" ? -1 : undefined);
 
   return (
     <Box sx={{
@@ -106,14 +121,14 @@ export default function AgentTicker() {
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: "8px" }}>
         <PhaseRail phase={status === "running" && !paused ? phase : null} />
         <Box sx={{ fontSize: "0.64rem", letterSpacing: "0.12em", color: DIM }}>
-          STEP {steps.length}
+          STEP {skillSteps.length}
         </Box>
       </Box>
       <Headline status={status} paused={paused} phase={phase} last={last} steps={steps} />
       {trail.length > 0 && (
         <Box sx={{ display: "flex", flexWrap: "wrap", gap: "4px", mt: "10px" }}>
           {trail.map((s) => (
-            <Box key={s.n} title={s.result ?? ""} sx={{
+            <Box key={s.n} title={`${s.decidedBy === "llm" ? "[LLM] " : ""}${s.result ?? ""}`} sx={{
               fontSize: "0.62rem", px: "6px", py: "2px", color: DIM,
               border: `1px solid ${s.ok === false ? "rgba(255,107,107,0.6)" : s.ok ? "rgba(61,220,132,0.6)" : "rgba(250,248,242,0.2)"}`,
             }}>

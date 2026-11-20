@@ -18,12 +18,21 @@ export default defineConfig({
   // bundle.
   server: {
     port: 5173,
-    // Agent harness -> System One (src/agent/system-one.js), key added here.
+    // Agent harness -> System One (src/agent/system-one.js) and the ReAct
+    // LLM (src/agent/react.js); the key is added here.
     proxy: {
       "/api/s1": {
         target: "https://openrouter.ai",
         changeOrigin: true,
         rewrite: () => "/api/alpha/decisions",
+        headers: { Authorization: `Bearer ${OPENROUTER_API_KEY ?? ""}` },
+      },
+      // Agent harness -> ReAct LLM (src/agent/react.js) when no base URL is
+      // set in the agent panel: OpenRouter's OpenAI-compatible endpoint.
+      "/api/llm": {
+        target: "https://openrouter.ai",
+        changeOrigin: true,
+        rewrite: () => "/api/v1/chat/completions",
         headers: { Authorization: `Bearer ${OPENROUTER_API_KEY ?? ""}` },
       },
     },

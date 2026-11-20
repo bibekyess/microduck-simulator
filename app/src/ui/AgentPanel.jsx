@@ -1,8 +1,10 @@
 // Agent panel (right edge): task picker, run controls, run summary and the
-// step-by-step trace from src/agent/harness.js. Each step card shows what
-// the duck saw, every skill option with Jev's probability (options that
-// weren't possible greyed out with the reason), and how the step ended.
-// A finished run can be exported as JSON for offline replay (replay.js).
+// step-by-step trace from src/agent/harness.js. Each step card says who
+// decided it (Jev or the LLM). Jev's cards show every skill option with
+// its probability (options that weren't possible greyed out with the
+// reason); the LLM's show why it was called, its reasoning and the call
+// with its args, and each recovery ends on a hand-back card. A finished run
+// can be exported as JSON for offline replay (replay.js).
 import { useEffect, useRef, useState } from "react";
 import Box from "@mui/material/Box";
 import { keyframes } from "@mui/material/styles";
@@ -11,6 +13,7 @@ import {
   TASKS, startAgent, pauseAgent, stopAgent, restartAgent, resetField,
 } from "../agent/harness.js";
 import { getApiKey, setApiKey } from "../agent/system-one.js";
+import { getLlmConfig, setLlmConfig } from "../agent/react.js";
 import { exportRun } from "../agent/replay.js";
 import { ORANGE, MONO } from "../theme.js";
 import { ANTON, CREAM, COMIC_INK } from "./comic.jsx";
@@ -19,8 +22,11 @@ const OK = "#3ddc84";
 const BAD = "#ff6b6b";
 const DIM = "rgba(250,248,242,0.5)";
 const FAINT = "rgba(250,248,242,0.14)";
+const LLM = "#9b8cff"; // the LLM's colour, Jev keeps ORANGE
 
 const titleOf = (step) => step.options.find((o) => o.label === step.choice)?.title ?? step.choice;
+const avg = (xs) => (xs.length ? Math.round(xs.reduce((a, x) => a + x, 0) / xs.length) : 0);
+const sum = (xs) => xs.reduce((a, x) => a + (x ?? 0), 0);
 // "approach · foot: left", or just the skill when it takes no args.
 const callOf = ({ skill, args }) => [skill, Object.entries(args ?? {}).map(([k, v]) => `${k}: ${v}`).join(", ")]
   .filter(Boolean).join(" · ");
@@ -34,6 +40,7 @@ const STATUS = {
   scored: { text: "Goal", color: OK },
   failed: { text: "Out of steps", color: BAD },
   stopped: { text: "Stopped", color: DIM },
+  stuck: { text: "Stuck", color: BAD },
   error: { text: "Error", color: BAD },
 };
 
@@ -119,19 +126,73 @@ function Stat({ label, value }) {
   );
 }
 
+// Run totals, with think time and cost split by decider.
 function Summary({ agent }) {
   const { steps, startedAt, endedAt, status } = agent;
   useTicker(status === "running");
   if (!startedAt) return null;
-  const decided = steps.filter((s) => s.latencyMs != null);
-  const avgThink = decided.length ? Math.round(decided.reduce((a, s) => a + s.latencyMs, 0) / decided.length) : 0;
-  const cost = steps.reduce((a, s) => a + (s.cost ?? 0), 0);
+  const jev = steps.filter((s) => s.decidedBy === "jev" && s.latencyMs != null);
+  const llmSteps = steps.filter((s) => s.decidedBy === "llm");
+  const llmThink = llmSteps.filter((s) => s.latencyMs);
+  const recoveries = steps.filter((s) => s.kind === "handback").length;
+  const skillSteps = steps.filter((s) => s.skill).length;
   return (
-    <Box sx={{ display: "flex", gap: "6px", mb: "10px" }}>
-      <Stat label="Steps" value={steps.length} />
-      <Stat label="Time" value={secs((endedAt ?? performance.now()) - startedAt)} />
-      <Stat label="Avg think" value={`${avgThink} ms`} />
-      <Stat label="Cost" value={`$${cost.toFixed(5)}`} />
+    <>
+      <Box sx={{ display: "flex", gap: "6px", mb: "6px" }}>
+        <Stat label="Steps" value={skillSteps} />
+        <Stat label="Time" value={secs((endedAt ?? performance.now()) - startedAt)} />
+        <Stat label="Cost" value={`$${sum(steps.map((s) => s.cost)).toFixed(5)}`} />
+      </Box>
+      <Box sx={{ display: "flex", gap: "6px", mb: "10px" }}>
+        <Stat label="Jev" value={<Box component="span" sx={{ color: ORANGE }}>{jev.length} · {avg(jev.map((s) => s.latencyMs))} ms · ${sum(jev.map((s) => s.cost)).toFixed(5)}</Box>} />
+        <Stat label="LLM" value={<Box component="span" sx={{ color: LLM }}>{recoveries} rec · {avg(llmThink.map((s) => s.latencyMs))} ms · ${sum(llmSteps.map((s) => s.cost)).toFixed(4)}</Box>} />
+      </Box>
+    </>
+  );
+}
+
+function DeciderBadge({ by }) {
+  const c = by === "llm" ? LLM : ORANGE;
+  return (
+    <Box component="span" sx={{ fontSize: "0.56rem", letterSpacing: "0.1em", px: "5px", py: "1px", border: `1px solid ${c}`, color: c, textTransform: "uppercase" }}>
+      {by === "llm" ? "LLM" : "Jev"}
+    </Box>
+  );
+}
+
+// The LLM's reasoning (and why it was called, on a recovery's first card).
+function LlmNotes({ step }) {
+  return (
+    <>
+      {step.why && (
+        <Box sx={{ fontSize: "0.62rem", color: DIM, mb: "4px" }}>
+          <Box component="span" sx={{ color: LLM }}>escalated:</Box> {step.why}
+        </Box>
+      )}
+      {step.thought && (
+        <Box sx={{ fontSize: "0.66rem", fontStyle: "italic", borderLeft: `2px solid ${LLM}`, pl: "6px", mb: "6px", whiteSpace: "pre-wrap" }}>
+          {step.thought}
+        </Box>
+      )}
+    </>
+  );
+}
+
+// End of an LLM recovery: its summary, which Jev reads next.
+function HandbackCard({ step }) {
+  return (
+    <Box sx={{ border: `1px dashed ${LLM}`, p: "8px 10px", mb: "8px" }}>
+      <Box sx={{ display: "flex", alignItems: "baseline", gap: "8px", mb: "4px" }}>
+        <DeciderBadge by="llm" />
+        <Box sx={{ fontFamily: ANTON, fontSize: "0.95rem", flex: 1 }}>
+          {step.recovered ? "Recovered · back to Jev" : "Hand-back · back to Jev"}
+        </Box>
+        <Box sx={{ fontSize: "0.58rem", color: DIM }}>
+          {step.calls ?? 0} skill{step.calls === 1 ? "" : "s"} · {step.requests ?? 0} req
+        </Box>
+      </Box>
+      <LlmNotes step={step} />
+      <Box sx={{ fontSize: "0.66rem", color: step.recovered ? OK : BAD }}>→ {step.summary}</Box>
     </Box>
   );
 }
@@ -172,6 +233,8 @@ function OptionRow({ title, p, chosen, reason }) {
 }
 
 function StepCard({ step, live }) {
+  if (step.kind === "handback") return <HandbackCard step={step} />;
+  const llm = step.decidedBy === "llm";
   const facing = step.observation.facing_goal?.startsWith("yes");
   const badge = step.ok == null ? null : step.ok ? { t: "✓", c: OK } : { t: "✗", c: BAD };
   const open = step.options.filter((o) => !o.blocked);
@@ -180,27 +243,66 @@ function StepCard({ step, live }) {
     ...step.options.filter((o) => o.blocked),
   ];
   return (
-    <Box sx={{ border: `1px solid ${live ? ORANGE : FAINT}`, p: "8px 10px", mb: "8px" }}>
+    <Box sx={{ border: `1px solid ${live ? (llm ? LLM : ORANGE) : FAINT}`, p: "8px 10px", mb: "8px" }}>
       <Box sx={{ display: "flex", alignItems: "baseline", gap: "8px" }}>
         <Box sx={{ fontSize: "0.62rem", color: DIM }}>{String(step.n).padStart(2, "0")}</Box>
+        <DeciderBadge by={step.decidedBy} />
         <Box sx={{ fontFamily: ANTON, fontSize: "1rem", letterSpacing: "0.03em", flex: 1 }}>{titleOf(step)}</Box>
         {badge ? <Box sx={{ color: badge.c, fontSize: "0.9rem" }}>{badge.t}</Box>
           : <Box sx={{ width: 7, height: 7, borderRadius: "50%", background: ORANGE, animation: `${pulse} 0.9s ease-in-out infinite` }} />}
       </Box>
       <Box sx={{ fontSize: "0.58rem", color: DIM, mb: "6px" }}>
-        {callOf(step)} · think {step.latencyMs} ms{step.actMs != null && <> · act {secs(step.actMs)}</>}
+        {step.kind === "think" ? "hand over to the LLM" : callOf(step)}
+        {step.latencyMs ? <> · think {step.latencyMs} ms</> : null}{step.actMs != null && <> · act {secs(step.actMs)}</>}
       </Box>
+      {llm && <LlmNotes step={step} />}
       <Box sx={{ mb: "4px" }}>
         <Chip>ball {step.observation.ball}</Chip>
         <Chip good={facing}>{facing ? "facing goal" : "not facing goal"}</Chip>
       </Box>
-      {rows.map((r) => (
+      {!llm && rows.map((r) => (
         <OptionRow key={r.label} title={r.title} p={r.p} reason={r.blocked} chosen={r.label === step.choice} />
       ))}
       <Box sx={{ fontSize: "0.66rem", mt: "6px", color: step.result ? (step.ok ? OK : BAD) : DIM }}>
         → {step.result ?? "running…"}
       </Box>
     </Box>
+  );
+}
+
+// ReAct LLM endpoint (react.js), kept in this browser. Read at run start.
+function LlmSettings({ disabled }) {
+  const [open, setOpen] = useState(false);
+  const [cfg, setCfg] = useState(getLlmConfig);
+  const set = (patch) => { const next = { ...cfg, ...patch }; setCfg(next); setLlmConfig(next); };
+  let headersOk = true;
+  try { if (cfg.headers.trim()) JSON.parse(cfg.headers); } catch { headersOk = false; }
+  const field = { fontFamily: MONO, fontSize: "0.66rem", background: "transparent", color: CREAM, border: `1px solid ${FAINT}`, p: "4px 5px", mb: "5px", width: "100%", boxSizing: "border-box" };
+  return (
+    <>
+      <Box component="button" onClick={() => setOpen((v) => !v)} sx={{
+        alignSelf: "flex-start", background: "none", border: "none", color: DIM, cursor: "pointer",
+        fontFamily: MONO, fontSize: "0.6rem", p: 0, mb: "8px",
+      }}>
+        {open ? "▾" : "▸"} LLM recovery {cfg.enabled ? `on · ${cfg.model}` : "off"}
+      </Box>
+      {open && (
+        <Box component="fieldset" disabled={disabled} sx={{ border: `1px solid ${FAINT}`, p: "6px 8px", m: 0, mb: "10px", fontSize: "0.6rem", color: DIM }}>
+          <Box component="label" sx={{ display: "flex", alignItems: "center", gap: "6px", mb: "6px", color: CREAM }}>
+            <input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
+            escalate to the LLM after a failure or when Jev asks (2 per run, 3 skills each)
+          </Box>
+          base URL (empty = dev proxy to OpenRouter)
+          <Box component="input" value={cfg.baseUrl} placeholder="https://openrouter.ai/api/v1" onChange={(e) => set({ baseUrl: e.target.value })} sx={field} />
+          model
+          <Box component="input" value={cfg.model} onChange={(e) => set({ model: e.target.value })} sx={field} />
+          API key (direct calls only; stays in this browser)
+          <Box component="input" type="password" value={cfg.apiKey} onChange={(e) => set({ apiKey: e.target.value.trim() })} sx={field} />
+          custom headers (JSON){!headersOk && <Box component="span" sx={{ color: BAD }}> · not valid JSON</Box>}
+          <Box component="input" value={cfg.headers} placeholder='{"X-Title": "Microduck"}' onChange={(e) => set({ headers: e.target.value })} sx={field} />
+        </Box>
+      )}
+    </>
   );
 }
 
@@ -229,7 +331,7 @@ export default function AgentPanel() {
       color: CREAM, fontFamily: MONO, p: "12px",
     }}>
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: "10px" }}>
-        <Box sx={{ fontFamily: ANTON, fontSize: "1.1rem", letterSpacing: "0.05em" }}>AGENT · SYSTEM ONE</Box>
+        <Box sx={{ fontFamily: ANTON, fontSize: "1.1rem", letterSpacing: "0.05em" }}>AGENT · JEV + LLM</Box>
         <StatusPill status={status} paused={paused} />
       </Box>
 
@@ -259,12 +361,14 @@ export default function AgentPanel() {
           }} />
       )}
 
+      <LlmSettings disabled={status === "running"} />
+
       <Summary agent={agent} />
       {error && <Box sx={{ fontSize: "0.7rem", color: BAD, mb: "8px" }}>{error}</Box>}
 
       <Box ref={listRef} sx={{ overflowY: "auto", pr: "2px" }}>
         {steps.map((s, i) => (
-          <StepCard key={s.n} step={s} live={status === "running" && i === steps.length - 1} />
+          <StepCard key={i} step={s} live={status === "running" && i === steps.length - 1} />
         ))}
       </Box>
     </Box>

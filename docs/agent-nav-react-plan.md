@@ -1,10 +1,12 @@
 # Plan: navigation stack + Jev / ReAct decider cascade
 
-Status (2026-11-20): **Phases 0-2, 2b and 3a done** (nav stack in
+Status (2026-11-20): **Phases 0-2, 2b, 3a and 3b done** (nav stack in
 `app/src/nav/`, `navigate_to` on it, offline test bed, browser benchmark
 below; pivot-aware planner that cannot be trapped by corners or walls;
 tasks as objects, skills with params / defaults / options, `aim`, run
-export and offline replay); Phase 3b (the decider cascade) next. Supersedes the "Ideas for next time" in
+export and offline replay; the Jev -> ReAct LLM cascade, verified with
+both deciders mocked; a live-model eval is waiting on an API key);
+Phase 4 (`nudge_ball`) next. Supersedes the "Ideas for next time" in
 `agent-go-behind-ball.md`. Amended 2026-11-13 after review (Decisions
 5-10): via-points before Hybrid A*, scoped LLM recovery, fewer escalation
 triggers, run export, `aim` pulled forward, tasks as objects.
@@ -456,6 +458,46 @@ Each phase is shippable on its own and ends with the benchmark.
   mid-run) escalates, the LLM recovers within its call budget and hands
   back, and Jev carries on; per-run cost / latency per decider shown in
   the panel.
+
+Done 2026-11-20:
+
+- `agent/decider.js`: escalation rules as pure functions (`escalationReason`
+  after a failed Jev step, `withThink` adds `think_it_through` while the
+  budget lasts, `isStuck` = the same call failing 3 times in a row ends
+  the run as "stuck", `makeBudget` = 2 escalations x 3 skill calls).
+- `agent/react.js`: OpenAI-compatible chat completions with tool calling
+  (one tool per task skill from its `params`, plus `recovered(summary)`);
+  `recover()` loop: one skill per call, defaults merged under the LLM's
+  args, args validated, blocked calls return their reason without
+  running or costing a skill call, extra tool calls in one message are
+  refused, at most `calls + 3` requests. A text-only reply counts as the
+  hand-back. Default model `anthropic/claude-haiku-5.5` (a setting:
+  check the exact ID on the endpoint).
+- `/api/llm` dev proxy to OpenRouter (key from `app/.env`), or a direct
+  base URL + key + custom headers from the panel. An endpoint error
+  (bad key, 5xx, network) is recorded as "LLM unavailable" and Jev carries
+  on alone for the rest of the run.
+- Harness: hand-back summary goes into Jev's `recent_steps` (with
+  `decided_by`); LLM steps share the 20-step budget. `replay.js`
+  re-decides only Jev's steps and replays hand-backs into the history.
+- UI: Jev / LLM badge per card, escalation reason and thought on LLM
+  cards, a hand-back card per recovery, cost and think time per decider,
+  LLM settings panel; ticker handles LLM steps.
+- Tests (`test/agent/react.test.js`): decider rules and the recovery loop
+  against a scripted LLM (11 tests); a live eval on the fixture's missed
+  kick runs when `LLM_API_KEY` is set (`LLM_BASE_URL`, `LLM_MODEL`
+  optional), skipped otherwise.
+- Browser, Jev and the LLM mocked at the network layer (real request
+  code, real physics): plain penalty scored with **0 LLM requests**;
+  ball moved during Jev's run-up -> run-up failed -> LLM re-staged and ran
+  up (2 skills), handed back, Jev kicked; a second failure used the
+  second escalation, after which Jev went on alone and three identical
+  failures ended the run as "stuck"; Jev choosing `think_it_through` ->
+  LLM recovery -> Jev scored; LLM endpoint down -> "LLM unavailable",
+  Jev scored alone.
+- Not yet done: a run against a real LLM (no key in the dev container);
+  run `LLM_API_KEY=... npm test` or play with the dev proxy to fill in
+  real latency / cost.
 
 ### Phase 4: layouts that need reasoning
 
