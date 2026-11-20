@@ -148,6 +148,12 @@ async function runAgent(taskId, fresh) {
       const { obs, options: gated } = look();
       const options = withThink(gated, budget.canEscalate());
       const observation = describe(obs);
+      // Every option blocked and no escalation left: nothing to decide.
+      if (!options.some((o) => !o.blocked)) {
+        status = "stuck";
+        error = `nothing the duck can do from here: ${gated.map((o) => `${o.label} (${o.blocked})`).join("; ")}`;
+        break;
+      }
 
       await checkpoint();
       setAgent({ phase: "decide" });

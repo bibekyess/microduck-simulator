@@ -36,7 +36,7 @@ export const TASKS = {
       await sleep(500); // let the ball settle
     },
     done: (obs) => obs.ballInGoal,
-    skills: ["navigate_to", "approach", "kick"],
+    skills: ["navigate_to", "approach", "kick", "nudge_ball"],
   },
 };
 

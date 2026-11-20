@@ -3,7 +3,7 @@
 // observe(env, aim) -> numbers the tools and the gating use. Metres and
 // radians; duck-frame values: fwd = ahead of the duck, lat = + to its
 // left / - to its right, bearings + = left. aim names the point the
-// shooting line runs to (field.js AIMS).
+// shooting line runs to (field.js AIMS), or is that point itself.
 // describe(obs) -> the same thing as short plain text for System One;
 // describe(obs, { full: true }) adds the field geometry an LLM needs.
 import { GOAL_CENTER, isBallInGoal } from "../game/goal.js";
@@ -32,7 +32,7 @@ export function observe(env, aim = "goal") {
   const goalBearing = wrapPi(Math.atan2(GOAL_CENTER[1] - y, GOAL_CENTER[0] - x) - yaw);
   // Shooting line: from the ball to the aim point in the net. A kick sends
   // the ball along the duck's heading, so this is the heading to hold.
-  const [ax, ay] = AIMS[aim];
+  const [ax, ay] = Array.isArray(aim) ? aim : AIMS[aim]; // a name, or a floor point (nudges)
   const shotHeading = Math.atan2(ay - ballPos[1], ax - ballPos[0]);
   return {
     duck, ballPos, ball, aim,

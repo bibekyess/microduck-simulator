@@ -29,7 +29,8 @@
 // kick with that foot.
 import { observe, wrapPi, kickableFoot } from "./observe.js";
 import { checkpoint } from "./run-control.js";
-import { AIMS, stagingPoses, fieldWorld, lineCoords } from "./field.js";
+import { AIMS, stagingPoses, fieldWorld, lineCoords, behindBall, hasRunUpRoom, nudgeHeading, nudgeHeadings, nudgeStage, nudgeWorld, nearestWall, NUDGE_BACKS } from "./field.js";
+import { plan } from "../nav/planner.js";
 import { makeNav } from "../nav/navigate.js";
 import { GOAL } from "../game/goal.js";
 import { SPAWN_X, SPAWN_Y } from "../game/constants.js";
@@ -104,8 +105,8 @@ function shootingLine(obs, foot) {
 // Plan a path to goalFn(obs) (a pose, or poses best first) and follow it
 // (nav/navigate.js), drawing the path on the floor. Resolves { ok, text,
 // data } with how far it got.
-async function navigate(env, goalFn, timeoutS, aim) {
-  const nav = makeNav(goalFn, { world: fieldWorld });
+async function navigate(env, goalFn, timeoutS, aim, world = fieldWorld) {
+  const nav = makeNav(goalFn, { world });
   let result = null, shown = null;
   try {
     const finished = await drive(env, (obs, elapsedS) => {
@@ -158,6 +159,37 @@ async function kick(env, foot) {
   const where = obs.ballPos[1] > GOAL.halfWidth ? "wide left of the goal"
     : obs.ballPos[1] < -GOAL.halfWidth ? "wide right of the goal" : "short of the goal";
   return failed(`the ball travelled ${moved.toFixed(2)} m and stopped ${where}`, data);
+}
+
+// Nudge: kick the ball a short way off a wall, from its free side
+// (field.js nudgeHeading), so the normal play has room afterwards. Built
+// from the same pieces as the normal play: navigate (aimed along the
+// nudge), run-up, kick. The direction is fixed at the start, as a floor
+// point the shooting line runs to.
+async function nudge(env, foot) {
+  const obs0 = observe(env);
+  const options = nudgeHeadings(obs0);
+  if (!options.length) return failed("no side of the ball is free to kick it from");
+  // Best direction whose staging pose the duck can actually reach.
+  const best = options.find((o) => plan(obs0.duck, nudgeStage(obs0, o), nudgeWorld(obs0)).points);
+  if (!best) return failed(`none of the ${options.length} sides the ball could be kicked from is reachable from here`);
+  const [bx, by] = obs0.ballPos;
+  const aim = [bx + 2 * Math.cos(best.heading), by + 2 * Math.sin(best.heading)];
+  const backs = NUDGE_BACKS.filter((b) => b <= best.back + 1e-9);
+  const reach = await navigate(env, (obs) => backs.map((b) => behindBall(obs, b)), 30, aim, nudgeWorld);
+  if (!reach.ok) return failed(`could not line up for the nudge: ${reach.text}`, reach.data);
+  const up = await approachForKick(env, foot, aim);
+  if (!up.ok) return failed(`nudge run-up: ${up.text}`, up.data);
+  const k = await kick(env, foot);
+  if (k.ok) return k; // straight into the goal
+  const obs = observe(env);
+  const moved = k.data.movedM ?? 0;
+  const { dist, wall } = nearestWall(obs.ballPos);
+  const data = { movedM: moved, ballPos: obs.ballPos, headingDeg: deg(best.heading) };
+  if (moved < 0.05) return failed("nudge missed: the foot did not reach the ball", data);
+  return hasRunUpRoom(obs)
+    ? done(`nudged the ball ${moved.toFixed(2)} m off the wall: it is now ${cm(dist)} cm from the ${wall} wall with room for a run-up toward the goal`, data)
+    : failed(`nudged the ball ${moved.toFixed(2)} m, but it still has no room for a run-up toward the goal (${cm(dist)} cm from the ${wall} wall)`, data);
 }
 
 // A run-up needs the duck behind the ball, near the shooting line and
@@ -217,7 +249,12 @@ export const TOOLS = {
       description: "Walk to a spot about half a metre behind the ball, on the line from the goal through the ball, to get room for a run-up.",
       args: { target: "behind_ball" },
     }],
-    blocker: () => null,
+    // No free staging pose (ball near a wall): nudge it off first.
+    blocker: (obs, { target }) => {
+      if (target !== "behind_ball" || hasRunUpRoom(obs)) return null;
+      const { dist, wall } = nearestWall(obs.ballPos);
+      return `no room behind the ball for a run-up (${cm(dist)} cm from the ${wall} wall): nudge it off first`;
+    },
     run: async (env, { target, aim }) => {
       if (!TARGETS[target]) return failed(`unknown target "${target}" (expected ${Object.keys(TARGETS).join(", ")})`);
       const bad = badAim(aim);
@@ -266,5 +303,26 @@ export const TOOLS = {
     })),
     blocker: (obs, { foot }) => kickBlocker(obs, foot),
     run: async (env, { foot }) => kick(env, foot),
+  },
+  nudge_ball: {
+    label: "Nudge",
+    description: "When the ball is too close to a wall for a run-up toward the goal: line up on its free side and kick it a short way into open floor, so the normal play can start. Picks the direction itself.",
+    params: {
+      type: "object",
+      properties: {
+        direction: { type: "string", enum: ["away_from_wall"], description: "away_from_wall: into the open floor, from whichever side of the ball is free." },
+        foot: FOOT_PARAM,
+      },
+    },
+    defaults: { direction: "away_from_wall", foot: "left" },
+    options: [{
+      label: "nudge_ball:away_from_wall",
+      title: "Nudge off the wall",
+      description: "The ball is too close to a wall to line up for the goal: kick it a short way into open floor first.",
+      args: {},
+    }],
+    blocker: (obs) => (hasRunUpRoom(obs) ? "the ball has room for a normal run-up"
+      : nudgeHeading(obs) ? null : "no side of the ball is free to kick it from"),
+    run: async (env, { foot }) => nudge(env, foot),
   },
 };

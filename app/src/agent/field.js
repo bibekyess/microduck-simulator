@@ -76,10 +76,67 @@ export function behindBall(obs, back = STAGE_BACK) {
 // closer ones that still satisfy the approach tool's blocker.
 export const stagingPoses = (obs) => STAGE_FALLBACKS.map((back) => behindBall(obs, back));
 
-export function fieldWorld(obs) {
+// tight: 1 cm margins instead of 4 / 3 cm, for nudges, which must squeeze
+// between a ball and a wall (a 25 cm gap fits the 16 cm duck, but not
+// with the normal margins on both sides).
+export function fieldWorld(obs, { tight = false } = {}) {
   return makeWorld({
     bounds: ARENA_HALF,
-    obstacles: [{ x: obs.ballPos[0], y: obs.ballPos[1], r: BALL_RADIUS + BALL_CLEAR }],
+    obstacles: [{ x: obs.ballPos[0], y: obs.ballPos[1], r: BALL_RADIUS + (tight ? 0.01 : BALL_CLEAR) }],
     segments: GOAL_SEGMENTS,
+    margin: tight ? 0.01 : 0.03,
   });
 }
+export const nudgeWorld = (obs) => fieldWorld(obs, { tight: true });
+
+// ── Nudges (Phase 4) ───────────────────────────────────────────────────
+// A ball close to a wall has no free spot behind it on the line to the
+// goal. A nudge kicks it a short way into open floor first, from whichever
+// side of it is free.
+
+export const NUDGE_BACKS = [0.4, 0.3, 0.25, 0.23]; // m behind the ball the nudge stages at, best first
+const NUDGE_SLACK = 0.015; // m of clearance a nudge staging pose must keep, so ball jitter can't block it
+const NUDGE_REACH = [0.5, 1.0, 1.5, 1.8]; // m a nudge kick may carry the ball (the one kick strength: 0.4-1.7 m measured)
+const NUDGE_HEADINGS = 72;
+// Walls and goal only: where a nudged ball could end up.
+const PITCH = makeWorld({ bounds: ARENA_HALF, segments: GOAL_SEGMENTS, margin: 0 });
+
+// True when one of the normal staging poses (toward the goal) is free.
+export function hasRunUpRoom(obs) {
+  const world = fieldWorld(obs);
+  return stagingPoses(obs).some((p) => world.isFree(p));
+}
+
+// The ball at `p`, seen as a fresh penalty: aimed at the goal.
+const ballAt = (p) => ({ ballPos: p, shotHeading: Math.atan2(GOAL_AIM[1] - p[1], GOAL_AIM[0] - p[0]) });
+
+// Directions to nudge the ball in, best first: [{ heading, back, score }]. A
+// direction qualifies when a staging pose `back` metres behind the ball on
+// it is free and a short kick keeps the ball off the walls and the net. It
+// scores by where the ball lands after short to long kicks (summed:
+// the ball bounces off walls, so a long kick into one only costs a
+// little): room for a normal run-up counts most, then distance from walls
+// and the goal, then a longer staging distance, then kicking goalward.
+export function nudgeHeadings(obs) {
+  const world = nudgeWorld(obs), [bx, by] = obs.ballPos;
+  const found = [];
+  for (let i = 0; i < NUDGE_HEADINGS; i++) {
+    const h = (i / NUDGE_HEADINGS) * 2 * Math.PI - Math.PI;
+    const c = Math.cos(h), s = Math.sin(h);
+    const back = NUDGE_BACKS.find((b) => world.clearance([bx - b * c, by - b * s]) >= NUDGE_SLACK);
+    if (back === undefined) continue;
+    const lands = NUDGE_REACH.map((r) => [bx + r * c, by + r * s]);
+    if (PITCH.clearance(lands[0]) < 0) continue; // a short kick already hits a wall or the net
+    const score = lands.reduce((sum, to) => {
+      const room = PITCH.clearance(to);
+      return sum + (hasRunUpRoom(ballAt(to)) ? 1 : 0) + Math.max(-0.3, Math.min(room, 0.4));
+    }, 0) + back + 0.1 * Math.cos(h - Math.atan2(GOAL_AIM[1] - by, GOAL_AIM[0] - bx)); // ties: steadier run-up, then toward the goal
+    found.push({ heading: h, back, score });
+  }
+  return found.sort((a, b) => b.score - a.score);
+}
+
+export const nudgeHeading = (obs) => nudgeHeadings(obs)[0] ?? null;
+
+// The nudge staging pose for one direction.
+export const nudgeStage = (obs, { heading, back }) => [obs.ballPos[0] - back * Math.cos(heading), obs.ballPos[1] - back * Math.sin(heading), heading];

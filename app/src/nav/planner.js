@@ -162,7 +162,7 @@ function pivotPlan(start, pres, world, radius, floor) {
 
 // Tier 3: A* over CELL-sized floor cells (8-connected), line-of-sight
 // smoothing, then pivot -> straight legs. Cells must keep the clearance
-// floor; the start cell is exempt (the duck is already there).
+// floor; the start and goal cells are exempt (checked exactly).
 function gridPlan(start, pres, goal, world, floor) {
   const n = Math.ceil((2 * world.bounds) / CELL);
   const toCell = (v) => Math.max(0, Math.min(n - 1, Math.floor((v + world.bounds) / CELL)));
@@ -174,8 +174,11 @@ function gridPlan(start, pres, goal, world, floor) {
   const segFree = (a, b) => free(line(a, b), world, floor);
 
   for (const { pre, tail, back } of pres) {
+    // The goal cell is exempt too: pre itself was checked exactly, and a
+    // pose wedged near a wall can be free while its cell centre is not.
     const g = toCell(pre[0]) * n + toCell(pre[1]);
-    if (!ok[g]) continue;
+    const gWas = ok[g];
+    ok[g] = 1;
     // A* with an octile heuristic and a binary heap.
     const cost = new Float64Array(n * n).fill(Infinity), from = new Int32Array(n * n).fill(-1);
     const h = (k) => { const dx = Math.abs(((k / n) | 0) - ((g / n) | 0)), dy = Math.abs((k % n) - (g % n)); return Math.max(dx, dy) + 0.414 * Math.min(dx, dy); };
@@ -198,6 +201,7 @@ function gridPlan(start, pres, goal, world, floor) {
         if (c < cost[m]) { cost[m] = c; from[m] = k; push([c + h(m), m]); }
       }
     }
+    ok[g] = gWas;
     if (!found) continue;
     // Cell chain -> floor points (exact start and pre at the ends), then
     // keep only the corners line of sight needs.

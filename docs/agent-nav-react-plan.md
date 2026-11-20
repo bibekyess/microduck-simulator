@@ -1,12 +1,13 @@
 # Plan: navigation stack + Jev / ReAct decider cascade
 
-Status (2026-11-20): **Phases 0-2, 2b, 3a and 3b done** (nav stack in
+Status (2026-11-20): **Phases 0-4 done** (nav stack in
 `app/src/nav/`, `navigate_to` on it, offline test bed, browser benchmark
 below; pivot-aware planner that cannot be trapped by corners or walls;
 tasks as objects, skills with params / defaults / options, `aim`, run
 export and offline replay; the Jev -> ReAct LLM cascade, verified with
-both deciders mocked; a live-model eval is waiting on an API key);
-Phase 4 (`nudge_ball`) next. Supersedes the "Ideas for next time" in
+both deciders mocked; a live-model eval is waiting on an API key;
+`nudge_ball` for balls against walls and in corners). Next: runs with
+the real Jev and a real LLM, exported as fixtures. Supersedes the "Ideas for next time" in
 `agent-go-behind-ball.md`. Amended 2026-11-13 after review (Decisions
 5-10): via-points before Hybrid A*, scoped LLM recovery, fewer escalation
 triggers, run export, `aim` pulled forward, tasks as objects.
@@ -507,25 +508,58 @@ Done 2026-11-20:
   reverse (measured 2026-11-13); pivots (Phase 2b) cover turning round.
 - **Done when**: side-wall and far-corner layouts score.
 
+Done 2026-11-20:
+
+- `field.js`: `hasRunUpRoom(obs)` (a normal staging pose is free);
+  `nudgeHeadings(obs)` tries 72 directions, keeps those with a free
+  staging pose 0.4 / 0.3 / 0.25 / 0.23 m behind the ball (1.5 cm slack),
+  drops those where a short kick hits a wall or the net, and scores where
+  the ball lands after 0.5 / 1.0 / 1.5 / 1.8 m kicks (the kick has one
+  strength; nudges travelled 1.2-1.7 m): room for a normal run-up, then
+  distance from walls, then a longer staging distance, then goalward.
+  Nudges use `nudgeWorld` (1 cm margins instead of 4 / 3 cm): in the far
+  corner the only free side is the pocket between ball and corner, which
+  the normal margins seal off though the 25 cm gap fits the 16 cm duck.
+- `nudge_ball` skill (`direction: away_from_wall`, `foot`): picks the best
+  direction whose staging pose the planner can reach, then navigate (aim
+  fixed as a floor point along it) -> run-up -> kick. ok when the ball
+  ends with room for a normal run-up. Offered only when there is no such
+  room; `navigate_to:behind_ball` is blocked in exactly that case ("nudge
+  it off first"), so Jev's choice there is forced.
+- Planner: the grid tier also exempts the goal cell (a pose wedged near a
+  wall can be free while its cell centre is not).
+- Harness: when every option is blocked and no escalation is left, the
+  run ends as "stuck" with the reasons, instead of asking Jev to choose
+  from nothing.
+- Tests: nudge gating, nudge headings for five wall / corner balls,
+  corner staging reachable; 51 pass, 1 skipped (live LLM eval).
+
 ## Benchmark
 
 Kept as the acceptance test for every phase, recorded in this file:
 
 | Layout (ball / duck) | Baseline | P1+P2 (2026-11-13) | P2b pivots (2026-11-20) | P3 | P4 |
 |---|---|---|---|---|---|
-| Penalty spot (0.7, 0.1) / spawn | ✅ 8 s | ✅ 5.3 s, 3° | ✅ 5.1 s, 2° | | |
+| Penalty spot (0.7, 0.1) / spawn | ✅ 8 s | ✅ 5.3 s, 3° | ✅ 5.1 s, 2° | ✅ 3 steps, 0 LLM | ✅ 3 steps, 0 LLM |
 | Goal line (1.12, 0.15) / spawn | ✅ 13 s | ✅ 8.6 s, 4° | ✅ 9.0 s, 1° | | |
 | Near post (1.05, −0.22) / (0.85, 0.05, 0°) | ❌ | ✅ 15.2 s, 6° | ✅ 9.5 s, 4°, 1 pivot | | |
 | Duck in front (0.5, 0) / (0.9, 0, 180°) | ❌ | ✅ 11.9 s, 2° | ✅ 9.5 s, 13°, 1 pivot | | |
 | Beside, facing away (0.2, 0.3) / (0.2, −0.1, −90°) | ? | ✅ 9.9 s, 1° | ✅ 9.9 s, 2° | | |
 | Goal-side, offset (0.0, −0.4) / (0.5, −0.2, 90°) | ? | ✅ 13.2 s, 6° | ✅ 13.2 s, 8° | | |
-| Side wall (0.3, 1.25) / spawn | ❌ no room | ❌ instant "target pose is blocked" | ❌ same (Phase 4) | | |
-| Far corner (−1.2, −1.2) / spawn | ❌ no room | ❌ instant "target pose is blocked" | ❌ same (Phase 4) | | |
+| Side wall (0.3, 1.25) / spawn | ❌ no room | ❌ instant "target pose is blocked" | ❌ same (Phase 4) | | ✅ 2 / 2 (7 and 14 steps) |
+| Far corner (−1.2, −1.2) / spawn | ❌ no room | ❌ instant "target pose is blocked" | ❌ same (Phase 4) | | ✅ 2 / 2 (4 steps, 0 LLM) |
+| Beside the goal (1.2, 1.25) / spawn | | | | | ✅ 2 / 3 (third ended with the ball 7 cm from the goal wall, no move possible) |
 | Wedged behind the ball (1.0, 0.05) / (0.85, 0, 6°) | | ❌ "no path" | ✅ 9.5 s, 1°, 1 pivot | | |
 | Duck in a corner (0.7, 0.1) / (1.35, 1.35, 45°) | | | ✅ 14.8 s, 13°, 1 pivot | | |
 | Duck facing the back wall (0.7, 0.1) / (−1.35, 0.3, 180°) | | | ✅ 11.0 s, 3°, 1 pivot | | |
 
-Times are `go_behind_ball` alone, ball never touched; the angle is the
+P3 / P4 are full runs from Start in headless Chromium with Jev and the
+LLM mocked at the network layer (Jev: kick > run-up > go behind > nudge,
+by availability; the LLM: re-stage, run up, hand back), real skills and
+physics. Misses after a run-up (mostly wide left) cost extra steps in
+several runs; whether that is the slow headless sim (the kick's settle
+pause is wall-clock) or the kick itself is not yet known. P1-P2b times
+are `go_behind_ball` alone, ball never touched; the angle is the
 facing error on arrival. Phase 2b times are on the sim clock (headless
 Chromium, rendering throttled to 2 fps so the physics keeps up). Phases
 1-2 were run with `__bench.run()` in the browser console (`app/src/agent/bench.js`, page opened with `?boot=1`);
@@ -609,6 +643,9 @@ bed starts the duck right up to the walls and gets 300 / 300 (mean
     that include hard layouts; the threshold must never fire on a normal
     penalty (zero LLM calls), and is skipped if no threshold separates
     failing from succeeding steps. (2026-11-20)
+16. Nudges are full-strength kicks (one kick policy), scored over the
+    whole 0.5-1.8 m range, and navigate with 1 cm margins. A ball with no
+    reachable free side is reported, not attempted. (2026-11-20)
 
 ## Open decisions
 

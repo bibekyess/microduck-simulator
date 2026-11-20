@@ -83,3 +83,14 @@ test("goal walled off from the start: no path, quickly", () => {
   assert.match(res.reason, /no path/);
   assert.ok(performance.now() - t0 < 200, "took too long");
 });
+
+test("a pose wedged in a corner, facing out of it, is reached (pivot at the end)", () => {
+  // Nudge margins (field.js nudgeWorld): ball + 1 cm, 1 cm margin.
+  const w = makeWorld({ bounds: 1.5, obstacles: [{ x: -1.2, y: -1.2, r: 0.06 }], margin: 0.01 });
+  const goal = [-1.2 - 0.23 * Math.SQRT1_2, -1.2 - 0.23 * Math.SQRT1_2, Math.PI / 4]; // nudge staging, far corner
+  assert.ok(w.isFree(goal));
+  const res = plan([-0.6, 0, 0], goal, w);
+  assert.ok(res.points, res.reason);
+  assert.equal(res.legs.at(-1).type, "pivot");
+  assert.ok(Math.abs(res.legs.at(-1).heading - Math.PI / 4) < 1e-9);
+});
